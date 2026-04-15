@@ -10,6 +10,7 @@ $DB_USER = getenv('MYSQLUSER') ?: 'root';
 $DB_PASS = getenv('MYSQLPASSWORD') ?: '';
 $DB_PORT = getenv('MYSQLPORT') ?: '3306';
 function getPDO() {
+    global $DB_HOST, $DB_NAME, $DB_USER, $DB_PASS, $DB_PORT;
     static $pdo;
     if ($pdo === null) {
         $dsn = 'mysql:host=' . $DB_HOST . ';port=' . $DB_PORT . ';dbname=' . $DB_NAME . ';charset=utf8mb4';
