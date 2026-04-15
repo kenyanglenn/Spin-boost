@@ -71,21 +71,20 @@ try {
     // Create pending deposit record
     $stmt = $pdo->prepare(
         "INSERT INTO deposits (user_id, amount, provider, your_reference, status) 
-         VALUES (?, ?, ?, ?, 'pending')"
+         VALUES (?, ?, 'intasend', ?, 'pending')"
     );
-    $stmt->execute([$user_id, $amount, PAYMENT_PROVIDER, $transaction_ref]);
+    $stmt->execute([$user_id, $amount, $transaction_ref]);
     $deposit_id = $pdo->lastInsertId();
 
-    // Get payment link based on provider
-    // TODO: Implement payment provider integration
-    $payment_link = null; // Placeholder - payment integration to be implemented
+    // Get IntaSend payment link
+    $payment_link = getIntaSendPaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username']);
 
     if (!$payment_link) {
         // Update deposit to failed
         $stmt = $pdo->prepare("UPDATE deposits SET status = 'failed' WHERE id = ?");
         $stmt->execute([$deposit_id]);
 
-        throw new Exception("Payment integration not yet implemented");
+        throw new Exception("Failed to generate payment link");
     }
 
     // Return success with payment link
@@ -107,5 +106,72 @@ try {
     ]);
 }
 
+/**
+ * Generate IntaSend payment link for deposits
+ */
+function getIntaSendPaymentLink($user_id, $amount, $phone, $reference, $username) {
+    // IntaSend send-money API for receiving payments
+    $payload = [
+        'transactions' => [
+            [
+                'phone_number' => $phone,
+                'amount' => $amount,
+                'reference' => $reference,
+                'account' => '1'
+            ]
+        ],
+        'currency' => PAYMENT_CURRENCY,
+        'provider' => 'MPESA-B2C'
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . '/send-money/initiate/');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . INTASEND_SECRET_KEY
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curl_error = curl_error($ch);
+    curl_close($ch);
+
+    error_log('IntaSend Deposit Request - Code: ' . $http_code . ', Response: ' . $response);
+
+    if ($curl_error) {
+        error_log('IntaSend Curl Error: ' . $curl_error);
+        return null;
+    }
+
+    if ($http_code !== 200 && $http_code !== 201) {
+        error_log('IntaSend HTTP Error ' . $http_code . ': ' . $response);
+        return null;
+    }
+
+    $data = json_decode($response, true);
+
+    if (!$data) {
+        error_log('IntaSend Invalid JSON Response: ' . $response);
+        return null;
+    }
+
+    // Check multiple possible response keys
+    if (isset($data['url'])) {
+        return $data['url'];
+    } elseif (isset($data['checkout_url'])) {
+        return $data['checkout_url'];
+    } elseif (isset($data['link'])) {
+        return $data['link'];
+    } else {
+        error_log('IntaSend Response has no URL key: ' . json_encode($data));
+        return null;
+    }
+}
 
 ?>

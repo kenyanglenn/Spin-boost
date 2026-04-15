@@ -4,17 +4,23 @@ define('PAYMENT_SECRET_KEY', getenv('PAYMENT_SECRET_KEY') ?: '');
 define('PAYMENT_WEBHOOK_SECRET', getenv('PAYMENT_WEBHOOK_SECRET') ?: '');
 define('APP_URL', getenv('APP_URL') ?: 'http://localhost:8000');
 
+// IntaSend Configuration
+define('INTASEND_PUBLIC_KEY', getenv('INTASEND_PUBLIC_KEY') ?: '');
+define('INTASEND_SECRET_KEY', getenv('INTASEND_SECRET_KEY') ?: '');
+define('INTASEND_BASE_URL', 'https://api.intasend.com/api/v1/');
+define('PAYMENT_CURRENCY', 'KES');
+
+// Payment limits
+define('MIN_DEPOSIT', 50.00);
+define('MAX_DEPOSIT', 100000.00);
+define('MIN_WITHDRAWAL', 100.00);
+define('MAX_WITHDRAWAL', 50000.00);
+
 /**
  * Helper function to get payment provider base URL
  */
 function getPaymentBaseUrl() {
-    if (PAYMENT_PROVIDER === 'flutterwave') {
-        return FLW_BASE_URL;
-    } elseif (PAYMENT_PROVIDER === 'paystack') {
-        return PAYSTACK_BASE_URL;
-    } else {
-        return INTASEND_BASE_URL;
-    }
+    return INTASEND_BASE_URL;
 }
 
 /**

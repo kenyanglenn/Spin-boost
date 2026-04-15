@@ -57,13 +57,8 @@ try {
         exit;
     }
 
-    if (PAYMENT_PROVIDER === 'flutterwave') {
-        $verification = verifyFlutterwavePayment($deposit['provider_reference'] ?? $deposit['your_reference']);
-    } else if (PAYMENT_PROVIDER === 'intasend') {
-        $verification = verifyIntaSendPayment($deposit['provider_reference'] ?? $deposit['your_reference']);
-    } else {
-        throw new Exception("Unknown payment provider");
-    }
+    // Verify IntaSend payment
+    $verification = verifyIntaSendPayment($deposit['provider_reference'] ?? $deposit['your_reference']);
 
     if ($verification === false) {
         updateDepositStatus($deposit['id'], 'failed');
@@ -175,37 +170,8 @@ try {
 }
 
 function verifyFlutterwavePayment($tx_ref) {
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, FLW_BASE_URL . '/transactions/verify_by_reference?tx_ref=' . urlencode($tx_ref));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . FLW_SECRET_KEY
-    ]);
-
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($http_code !== 200) {
-        error_log('Flutterwave verification error: ' . $response);
-        return false;
-    }
-
-    $data = json_decode($response, true);
-
-    if ($data['status'] !== 'success') {
-        return false;
-    }
-
-    $transaction = $data['data'];
-
-    return [
-        'provider_id' => $transaction['id'] ?? null,
-        'amount' => floatval($transaction['amount']),
-        'status' => $transaction['status'],
-        'currency' => $transaction['currency'],
-        'phone' => $transaction['customer']['phone_number'] ?? null
-    ];
+    // TODO: Implement Flutterwave payment verification
+    return false; // Placeholder
 }
 
 function verifyIntaSendPayment($reference) {

@@ -23,15 +23,8 @@ try {
         exit;
     }
 
-    if (PAYMENT_PROVIDER === 'flutterwave') {
-        // TODO: Implement Flutterwave webhook handler
-        handleFlutterwaveWebhook($data);
-    } else if (PAYMENT_PROVIDER === 'intasend') {
-        // TODO: Implement IntaSend webhook handler
-        handleIntaSendWebhook($data);
-    } else {
-        throw new Exception("Unknown payment provider");
-    }
+    // Handle IntaSend webhook
+    handleIntaSendWebhook($data);
 
 } catch (Exception $e) {
     error_log("Webhook error: " . $e->getMessage());
@@ -46,9 +39,69 @@ function handleFlutterwaveWebhook($data) {
 }
 
 function handleIntaSendWebhook($data) {
-    // TODO: Implement IntaSend webhook verification and processing
-    http_response_code(501);
-    echo json_encode(['success' => false, 'message' => 'IntaSend webhook not implemented']);
+    $headers = getallheaders();
+    $intasend_signature = $headers['X-IntaSend-Signature'] ?? null;
+
+    if ($intasend_signature) {
+        $computed_hash = hash_hmac('sha256',
+            file_get_contents('php://input'),
+            INTASEND_SECRET_KEY
+        );
+
+        if ($computed_hash !== $intasend_signature) {
+            error_log("IntaSend: Signature mismatch");
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Signature verification failed']);
+            exit;
+        }
+    }
+
+    $reference = $data['reference_id'] ?? null;
+    $amount = floatval($data['amount'] ?? 0);
+    $status = $data['status'] ?? null;
+    $provider_id = $data['id'] ?? null;
+
+    if (!$reference || !$amount) {
+        throw new Exception("Missing required webhook fields");
+    }
+
+    $pdo = getPDO();
+    $stmt = $pdo->prepare("SELECT * FROM deposits WHERE your_reference = ? LIMIT 1");
+    $stmt->execute([$reference]);
+    $deposit = $stmt->fetch();
+
+    if (!$deposit) {
+        error_log("IntaSend webhook: Deposit not found for reference: $reference");
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'Deposit not found']);
+        exit;
+    }
+
+    if ($status !== 'paid') {
+        updateDepositStatus($deposit['id'], 'failed');
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Payment failed']);
+        exit;
+    }
+
+    if (abs($amount - $deposit['amount']) >= 0.01) {
+        error_log("IntaSend webhook: Amount mismatch for deposit {$deposit['id']}");
+        updateDepositStatus($deposit['id'], 'failed');
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Amount mismatch']);
+        exit;
+    }
+
+    if ($deposit['status'] === 'completed') {
+        http_response_code(200);
+        echo json_encode(['success' => true, 'message' => 'Already processed']);
+        exit;
+    }
+
+    processPayment($deposit['id'], $deposit['user_id'], $deposit['amount'], $provider_id);
+
+    http_response_code(200);
+    echo json_encode(['success' => true, 'message' => 'Webhook processed']);
 }
 
 function processPayment($deposit_id, $user_id, $amount, $provider_id = null) {
