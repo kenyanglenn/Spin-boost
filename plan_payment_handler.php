@@ -92,22 +92,15 @@ try {
     ];
 
     // Get payment link based on provider
-    if (PAYMENT_PROVIDER === 'flutterwave') {
-        $payment_link = getFlutterwavePaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username'] . ' - ' . $plan . ' Plan');
-    } elseif (PAYMENT_PROVIDER === 'paystack') {
-        $payment_link = getPaystackPaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username'] . ' - ' . $plan . ' Plan');
-    } else if (PAYMENT_PROVIDER === 'intasend') {
-        $payment_link = getIntaSendPaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username'] . ' - ' . $plan . ' Plan');
-    } else {
-        throw new Exception("Unknown payment provider");
-    }
+    // TODO: Implement payment provider integration
+    $payment_link = null; // Placeholder - payment integration to be implemented
 
     if (!$payment_link) {
         // Update deposit to failed
         $stmt = $pdo->prepare("UPDATE deposits SET status = 'failed' WHERE your_reference = ?");
         $stmt->execute([$transaction_ref]);
 
-        throw new Exception("Failed to generate payment link");
+        throw new Exception("Payment integration not yet implemented");
     }
 
     // Return success with payment link
@@ -130,174 +123,7 @@ try {
     ]);
 }
 
-/**
- * Generate Flutterwave payment link for plan purchase
- */
-function getFlutterwavePaymentLink($user_id, $amount, $phone, $reference, $description) {
-    $payload = [
-        'tx_ref' => $reference,
-        'amount' => (string)$amount,
-        'currency' => PAYMENT_CURRENCY,
-        'payment_options' => 'card,mobilemoney,ussd',
-        'redirect_url' => PAYMENT_RETURN_URL,
-        'customer' => [
-            'email' => 'user' . $user_id . '@spinboost.local',
-            'phonenumber' => $phone,
-            'name' => 'User ' . $user_id
-        ],
-        'customizations' => [
-            'title' => 'SpinBoost - Plan Purchase',
-            'description' => $description
-        ],
-        'public_key' => FLW_PUBLIC_KEY
-    ];
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, FLW_BASE_URL . '/payments');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . FLW_SECRET_KEY
-    ]);
-    // SSL verification bypass for sandbox/testing (set to true in production)
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($http_code !== 200) {
-        error_log('Flutterwave Plan Payment Error: ' . $response);
-        return null;
-    }
-
-    $data = json_decode($response, true);
-
-    if ($data['status'] !== 'success') {
-        error_log('Flutterwave Plan Payment API Error: ' . json_encode($data));
-        return null;
-    }
-
-    return $data['data']['link'] ?? null;
-}
-
-/**
- * Generate Paystack payment link for plan purchase
- */
-function getPaystackPaymentLink($user_id, $amount, $phone, $reference, $description) {
-    // Paystack initialize transaction API
-    $payload = [
-        'email' => 'user' . $user_id . '@spinboost.local',
-        'amount' => $amount * 100, // Paystack expects amount in kobo (multiply by 100)
-        'reference' => $reference,
-        'callback_url' => PAYMENT_RETURN_URL,
-        'metadata' => [
-            'user_id' => $user_id,
-            'phone' => $phone,
-            'plan_description' => $description,
-            'custom_fields' => [
-                [
-                    'display_name' => 'Plan Description',
-                    'variable_name' => 'plan_description',
-                    'value' => $description
-                ]
-            ]
-        ]
-    ];
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, PAYSTACK_BASE_URL . '/transaction/initialize');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . PAYSTACK_SECRET_KEY
-    ]);
-    // SSL verification bypass for sandbox/testing
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($http_code !== 200) {
-        error_log('Paystack Plan Payment Error: ' . $response);
-        return null;
-    }
-
-    $data = json_decode($response, true);
-
-    if (!$data['status']) {
-        error_log('Paystack Plan Payment API Error: ' . json_encode($data));
-        return null;
-    }
-
-    return $data['data']['authorization_url'] ?? null;
-}
-
-/**
- * Generate IntaSend payment link for plan purchase
- */
-function getIntaSendPaymentLink($user_id, $amount, $phone, $reference, $description) {
-    // IntaSend send-money API for receiving payments
-    // Create a send-money session for M-Pesa payments
-
-    $payload = [
-        'transactions' => [
-            [
-                'phone_number' => $phone,
-                'amount' => $amount,
-                'reference' => $reference,
-                'account' => '1'
-            ]
-        ],
-        'currency' => PAYMENT_CURRENCY,
-        'provider' => 'MPESA-B2C'
-    ];
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . '/send-money/initiate/');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . INTASEND_SECRET_KEY
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    // SSL verification bypass for sandbox/testing (set to true in production)
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curl_error = curl_error($ch);
-    curl_close($ch);
-
-    // Log the full response for debugging
-    error_log('IntaSend Send-Money Request - Code: ' . $http_code . ', Response: ' . $response);
-
-    if ($curl_error) {
-        error_log('IntaSend Curl Error: ' . $curl_error);
-        return null;
-    }
-
-    if ($http_code !== 200 && $http_code !== 201) {
-        error_log('IntaSend HTTP Error ' . $http_code . ': ' . $response);
-        return null;
-    }
-
-    $data = json_decode($response, true);
-
-    if (!$data) {
-        error_log('IntaSend Invalid JSON Response: ' . $response);
-        return null;
-    }
 
     // Check multiple possible response keys
     if (isset($data['url'])) {

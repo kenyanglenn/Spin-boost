@@ -23,7 +23,7 @@ try {
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
         amount DECIMAL(10,2) NOT NULL,
-        provider VARCHAR(50) NOT NULL COMMENT 'flutterwave or intasend',
+        provider VARCHAR(50) NOT NULL COMMENT 'Payment provider (to be implemented)',
         provider_reference VARCHAR(255) UNIQUE COMMENT 'Payment provider transaction ID (set after verification)',
         your_reference VARCHAR(255) NOT NULL UNIQUE COMMENT 'Your unique transaction identifier',
         status ENUM('pending','completed','failed','expired') NOT NULL DEFAULT 'pending',
