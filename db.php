@@ -4,22 +4,21 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // Database connection settings - Railway compatible
-const DB_HOST = getenv('MYSQLHOST') ?: '127.0.0.1';
-const DB_NAME = getenv('MYSQLDATABASE') ?: 'spinboost';
-const DB_USER = getenv('MYSQLUSER') ?: 'root';
-const DB_PASS = getenv('MYSQLPASSWORD') ?: '';
-const DB_PORT = getenv('MYSQLPORT') ?: '3306';
-
+$DB_HOST = getenv('MYSQLHOST') ?: '127.0.0.1';
+$DB_NAME = getenv('MYSQLDATABASE') ?: 'railway';
+$DB_USER = getenv('MYSQLUSER') ?: 'root';
+$DB_PASS = getenv('MYSQLPASSWORD') ?: '';
+$DB_PORT = getenv('MYSQLPORT') ?: '3306';
 function getPDO() {
     static $pdo;
     if ($pdo === null) {
-        $dsn = 'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';dbname=' . DB_NAME . ';charset=utf8mb4';
+        $dsn = 'mysql:host=' . $DB_HOST . ';port=' . $DB_PORT . ';dbname=' . $DB_NAME;
         $options = [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,
         ];
-        $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+        $pdo = new PDO($dsn, $DB_USER, $DB_PASS, $options);
     }
     return $pdo;
 }
