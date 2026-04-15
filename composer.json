@@ -1,0 +1,20 @@
+{
+    "name": "spinboost/spinboost-game",
+    "description": "SpinBoost - A fun spinning game with wallet system",
+    "type": "project",
+    "require": {
+        "php": ">=8.0",
+        "ext-pdo": "*",
+        "ext-mysqli": "*"
+    },
+    "config": {
+        "platform": {
+            "php": "8.1"
+        }
+    },
+    "scripts": {
+        "post-install-cmd": [
+            "echo 'SpinBoost deployment ready'"
+        ]
+    }
+}
