@@ -4,12 +4,12 @@ $pdo = getPDO();
 $currentUser = getCurrentUser();
 
 if (!$currentUser) {
-    header('Location: login');
+    header('Location: login.php');
     exit;
 }
 
 if ($currentUser['plan'] === 'NONE') {
-    header('Location: plan_selection');
+    header('Location: plan_selection.php');
     exit;
 }
 
@@ -96,7 +96,7 @@ $flash = getFlashMessage();
             </div>
             <div class="top-bar-right">
                 <div class="plan-pill">Plan: <?php echo htmlspecialchars($currentUser['plan']); ?></div>
-                <a href="logout" class="secondary-btn">Logout</a>
+                <a href="logout.php" class="secondary-btn">Logout</a>
             </div>
         </header>
 
@@ -160,7 +160,7 @@ $flash = getFlashMessage();
             <button class="menu-item" data-section="change-plan">Change Plan</button>
             <button class="menu-item" data-section="withdraw">Withdraw</button>
             <button class="menu-item" data-section="help">Help</button>
-            <a href="analytics" class="menu-item" style="text-decoration: none; color: inherit;">📊 Game Mechanics</a>
+            <a href="analytics.php" class="menu-item" style="text-decoration: none; color: inherit;">📊 Game Mechanics</a>
         </nav>
         <div class="menu-content">
             <div class="menu-section" id="referrals-section">

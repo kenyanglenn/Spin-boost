@@ -6,7 +6,7 @@ $pdo = getPDO();
 $currentUser = getCurrentUser();
 
 if (!$currentUser || $currentUser['plan'] === 'NONE') {
-    header('Location: login');
+    header('Location: login.php');
     exit;
 }
 ?>
@@ -92,7 +92,7 @@ if (!$currentUser || $currentUser['plan'] === 'NONE') {
                 <h1>Game Mechanics Report</h1>
             </div>
             <div class="top-bar-right">
-                <a href="spin" class="secondary-btn">Back to Game</a>
+                <a href="spin.php" class="secondary-btn">Back to Game</a>
             </div>
         </header>
         

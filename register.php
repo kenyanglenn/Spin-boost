@@ -18,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $userId = registerUser($username, $phone, $password, $referred_by);
             $_SESSION['user_id'] = $userId;
-            header('Location: plan_selection');
+            header('Location: plan_selection.php');
             exit;
         } catch (Exception $e) {
             setFlashMessage('error', 'Registration failed. Username or phone may already exist.');
@@ -65,7 +65,7 @@ $flash = getFlashMessage();
                 <button type="submit" class="primary-btn">Register</button>
             </form>
 
-            <p class="auth-link">Already have an account? <a href="login">Login here</a></p>
+            <p class="auth-link">Already have an account? <a href="login.php">Login here</a></p>
         </div>
     </div>
 

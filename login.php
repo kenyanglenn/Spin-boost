@@ -8,10 +8,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = loginUser($usernameOrPhone, $password);
     if ($user) {
         if ($user['plan'] === 'NONE') {
-            header('Location: plan_selection');
+            header('Location: plan_selection.php');
             exit;
         }
-        header('Location: spin');
+        header('Location: spin.php');
         exit;
     } else {
         setFlashMessage('error', 'Invalid credentials.');
@@ -49,7 +49,7 @@ $flash = getFlashMessage();
                 <button type="submit" class="primary-btn">Login</button>
             </form>
 
-            <p class="auth-link">Don't have an account? <a href="register">Register here</a></p>
+            <p class="auth-link">Don't have an account? <a href="register.php">Register here</a></p>
         </div>
     </div>
 

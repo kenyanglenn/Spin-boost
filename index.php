@@ -30,8 +30,8 @@ $flash = getFlashMessage();
             <h2>Join the Fun!</h2>
             <p>Spin wheels, solve puzzles, earn rewards, and refer friends for more bonuses.</p>
             <div class="cta-buttons">
-                <a href="register" class="primary-btn">Register Now</a>
-                <a href="login" class="secondary-btn">Login</a>
+                <a href="register.php" class="primary-btn">Register Now</a>
+                <a href="login.php" class="secondary-btn">Login</a>
             </div>
         </section>
 

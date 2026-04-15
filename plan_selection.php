@@ -3,7 +3,7 @@ require_once 'db.php';
 
 $currentUser = getCurrentUser();
 if (!$currentUser) {
-    header('Location: login');
+    header('Location: login.php');
     exit;
 }
 
@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['selected_plan'])) {
                 }
             }
             setFlashMessage('success', $paymentResult['message'] . ' Your plan has been activated and will be confirmed once payment is completed.');
-            header('Location: spin');
+            header('Location: spin.php');
             exit;
         } else {
             setFlashMessage('error', 'MPESA payment prompt could not be sent. Please try again.');
@@ -98,7 +98,7 @@ $flash = getFlashMessage();
         </section>
 
         <footer class="plan-footer">
-            <a href="spin" class="secondary-btn">Back to Dashboard</a>
+            <a href="spin.php" class="secondary-btn">Back to Dashboard</a>
         </footer>
     </div>
 
