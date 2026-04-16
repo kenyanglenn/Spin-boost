@@ -88,12 +88,67 @@ function updateUserPlan($userId, $plan) {
 }
 
 function initiateMpesaPayment($phone, $amount, $description = 'Spin Boost plan purchase') {
-    // Placeholder for MPESA API integration.
-    // Replace this with the actual API call to send the STK push to the user's phone number.
+    // IntaSend STK Push integration
+    require_once 'payment_config.php';
+    
+    $payload = [
+        'phone_number' => $phone,
+        'amount' => $amount,
+        'currency' => PAYMENT_CURRENCY,
+        'api_ref' => 'LEGACY_' . bin2hex(random_bytes(8))
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . 'payment/stk-push/');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . INTASEND_SECRET_KEY
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curl_error = curl_error($ch);
+    curl_close($ch);
+
+    error_log('Legacy Mpesa Payment STK Push - Code: ' . $http_code . ', Response: ' . $response);
+
+    if ($curl_error) {
+        error_log('IntaSend Curl Error: ' . $curl_error);
+        return [
+            'success' => false,
+            'message' => 'Payment service temporarily unavailable'
+        ];
+    }
+
+    if ($http_code !== 200 && $http_code !== 201) {
+        error_log('IntaSend HTTP Error ' . $http_code . ': ' . $response);
+        return [
+            'success' => false,
+            'message' => 'Payment initiation failed'
+        ];
+    }
+
+    $data = json_decode($response, true);
+
+    if (!$data) {
+        error_log('IntaSend Invalid JSON Response: ' . $response);
+        return [
+            'success' => false,
+            'message' => 'Invalid payment response'
+        ];
+    }
+
+    // STK Push initiated successfully
     return [
         'success' => true,
-        'message' => 'MPESA prompt sent to ' . htmlspecialchars($phone) . ' for ' . number_format($amount, 2) . ' KES.',
-        'checkoutRequestID' => 'MPESA-' . bin2hex(random_bytes(5)),
+        'message' => 'STK Push sent to ' . htmlspecialchars($phone) . ' for ' . number_format($amount, 2) . ' KES.',
+        'checkoutRequestID' => $data['id'] ?? bin2hex(random_bytes(5)),
     ];
 }
 

@@ -186,10 +186,15 @@ $flash = getFlashMessage();
 
                     const result = await response.json();
 
-                    if (result.success && result.payment_link) {
-                        // Close modal and redirect to payment
+                    if (result.success && result.stk_push_initiated) {
+                        // Close modal and show success message
                         planModal.classList.remove('active');
-                        window.location.href = result.payment_link;
+                        showToast('STK Push initiated! Please check your phone for the MPesa prompt to complete payment.', 'success');
+                        
+                        // Optionally redirect after a delay
+                        setTimeout(() => {
+                            window.location.href = 'spin.php';
+                        }, 3000);
                     } else {
                         throw new Error(result.message || 'Failed to initiate payment');
                     }

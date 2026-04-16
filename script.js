@@ -299,9 +299,18 @@ if (topupForm) {
 
             const result = await response.json();
 
-            if (result.success && result.payment_link) {
-                // Redirect to payment provider
-                window.location.href = result.payment_link;
+            if (result.success && result.stk_push_initiated) {
+                // STK Push initiated successfully
+                topupForm.style.display = 'block';
+                topupProcessing.style.display = 'none';
+                topupSubmitBtn.disabled = false;
+                topupModal.classList.remove('active');
+                showToast('STK Push initiated! Please check your phone for the MPesa prompt to complete the deposit.', 'success');
+                
+                // Optionally refresh wallet balance after a delay
+                setTimeout(() => {
+                    window.location.reload();
+                }, 5000);
             } else {
                 throw new Error(result.message || 'Failed to initiate payment');
             }

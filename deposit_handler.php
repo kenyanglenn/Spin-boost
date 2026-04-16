@@ -77,23 +77,23 @@ try {
     $deposit_id = $pdo->lastInsertId();
 
     // Get IntaSend payment link
-    $payment_link = getIntaSendPaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username']);
+    $payment_result = getIntaSendPaymentLink($user_id, $amount, $phone, $transaction_ref, $user['username']);
 
-    if (!$payment_link) {
+    if (!$payment_result) {
         // Update deposit to failed
         $stmt = $pdo->prepare("UPDATE deposits SET status = 'failed' WHERE id = ?");
         $stmt->execute([$deposit_id]);
 
-        throw new Exception("Failed to generate payment link");
+        throw new Exception("Failed to initiate STK Push");
     }
 
-    // Return success with payment link
+    // Return success - STK Push has been initiated
     http_response_code(200);
     echo json_encode([
         'success' => true,
-        'message' => 'Redirecting to payment page...',
-        'payment_link' => $payment_link,
-        'transaction_ref' => $transaction_ref
+        'message' => 'STK Push initiated. Please check your phone for the MPesa prompt.',
+        'transaction_ref' => $transaction_ref,
+        'stk_push_initiated' => true
     ]);
 
 } catch (Exception $e) {
@@ -110,22 +110,16 @@ try {
  * Generate IntaSend payment link for deposits
  */
 function getIntaSendPaymentLink($user_id, $amount, $phone, $reference, $username) {
-    // IntaSend send-money API for receiving payments
+    // IntaSend STK Push API for receiving payments
     $payload = [
-        'transactions' => [
-            [
-                'phone_number' => $phone,
-                'amount' => $amount,
-                'reference' => $reference,
-                'account' => '1'
-            ]
-        ],
+        'phone_number' => $phone,
+        'amount' => $amount,
         'currency' => PAYMENT_CURRENCY,
-        'provider' => 'MPESA-B2C'
+        'api_ref' => $reference
     ];
 
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . '/send-money/initiate/');
+    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . 'payment/stk-push/');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
@@ -142,7 +136,7 @@ function getIntaSendPaymentLink($user_id, $amount, $phone, $reference, $username
     $curl_error = curl_error($ch);
     curl_close($ch);
 
-    error_log('IntaSend Deposit Request - Code: ' . $http_code . ', Response: ' . $response);
+    error_log('IntaSend STK Push Request - Code: ' . $http_code . ', Response: ' . $response);
 
     if ($curl_error) {
         error_log('IntaSend Curl Error: ' . $curl_error);
@@ -161,15 +155,15 @@ function getIntaSendPaymentLink($user_id, $amount, $phone, $reference, $username
         return null;
     }
 
-    // Check multiple possible response keys
-    if (isset($data['url'])) {
-        return $data['url'];
-    } elseif (isset($data['checkout_url'])) {
+    // STK Push doesn't return a URL, it initiates the push directly
+    // Return a success indicator or checkout URL if available
+    if (isset($data['checkout_url'])) {
         return $data['checkout_url'];
-    } elseif (isset($data['link'])) {
-        return $data['link'];
+    } elseif (isset($data['id']) || isset($data['reference'])) {
+        // STK Push initiated successfully, return a placeholder URL or success
+        return 'stk_push_initiated'; // We'll handle this in the frontend
     } else {
-        error_log('IntaSend Response has no URL key: ' . json_encode($data));
+        error_log('IntaSend STK Push Response: ' . json_encode($data));
         return null;
     }
 }

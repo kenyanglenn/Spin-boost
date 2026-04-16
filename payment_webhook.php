@@ -98,13 +98,18 @@ function handleIntaSendWebhook($data) {
         exit;
     }
 
-    processPayment($deposit['id'], $deposit['user_id'], $deposit['amount'], $provider_id);
+    // Check if this is a plan purchase (reference starts with PLAN_)
+    if (strpos($deposit['your_reference'], 'PLAN_') === 0) {
+        processPlanPayment($deposit['id'], $deposit['user_id'], $deposit['amount'], $provider_id);
+    } else {
+        processPayment($deposit['id'], $deposit['user_id'], $deposit['amount'], $provider_id);
+    }
 
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => 'Webhook processed']);
 }
 
-function processPayment($deposit_id, $user_id, $amount, $provider_id = null) {
+function processPlanPayment($deposit_id, $user_id, $amount, $provider_id = null) {
     $pdo = getPDO();
 
     try {
@@ -119,15 +124,38 @@ function processPayment($deposit_id, $user_id, $amount, $provider_id = null) {
             $stmt->execute([$verified_at, $deposit_id]);
         }
 
-        $stmt = $pdo->prepare("UPDATE users SET wallet = wallet + ? WHERE id = ?");
-        $stmt->execute([$amount, $user_id]);
+        // Determine plan based on amount
+        $plan_costs = [
+            20.00 => 'REGULAR',
+            50.00 => 'PREMIUM',
+            100.00 => 'PREMIUM+'
+        ];
+
+        $plan = $plan_costs[$amount] ?? 'NONE';
+
+        if ($plan !== 'NONE') {
+            $stmt = $pdo->prepare("UPDATE users SET plan = ? WHERE id = ?");
+            $stmt->execute([$plan, $user_id]);
+
+            // Check for referral rewards
+            $stmt = $pdo->prepare("SELECT referred_by FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user_data = $stmt->fetch();
+
+            if ($user_data && $user_data['referred_by']) {
+                $referrer_id = getReferrerId($user_data['referred_by']);
+                if ($referrer_id) {
+                    addReferralReward($referrer_id, $plan);
+                }
+            }
+        }
 
         $pdo->commit();
-        error_log("Deposit processed. ID: $deposit_id, User: $user_id, Amount: $amount");
+        error_log("Plan payment processed. ID: $deposit_id, User: $user_id, Plan: $plan, Amount: $amount");
 
     } catch (Exception $e) {
         $pdo->rollBack();
-        throw new Exception("Transaction error: " . $e->getMessage());
+        throw new Exception("Plan payment error: " . $e->getMessage());
     }
 }
 
