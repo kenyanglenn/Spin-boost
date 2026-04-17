@@ -923,29 +923,33 @@ a {
     color: #eef2ff;
 }
 
-.referral-table, .withdrawal-table {
+.referral-table, .withdrawal-table, .history-table {
     width: 100%;
     border-collapse: collapse;
     margin-top: 10px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 8px;
+    overflow: hidden;
 }
 
 .referral-table th, .referral-table td,
-.withdrawal-table th, .withdrawal-table td {
+.withdrawal-table th, .withdrawal-table td,
+.history-table th, .history-table td {
     padding: 10px;
     text-align: left;
     border-bottom: 1px solid var(--border);
 }
 
-.referral-table th, .withdrawal-table th {
+.referral-table th, .withdrawal-table th, .history-table th {
     background: rgba(255,255,255,0.08);
     font-weight: 600;
     color: #dbeafe;
 }
 
-.referral-table td, .withdrawal-table td {
+.referral-table td, .withdrawal-table td, .history-table td {
     color: #eef2ff;
 }
 
-.referral-table tr:hover, .withdrawal-table tr:hover {
+.referral-table tr:hover, .withdrawal-table tr:hover, .history-table tr:hover {
     background: rgba(255,255,255,0.02);
 }

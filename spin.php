@@ -8,8 +8,32 @@ if (!$currentUser) {
     exit;
 }
 
+// Check if plan has changed since session started
+if (!isset($_SESSION['plan_change_notified']) && isset($_SESSION['original_plan']) && $_SESSION['original_plan'] !== $currentUser['plan'] && $_SESSION['original_plan'] !== 'NONE') {
+    // Plan has changed, show notification and logout
+    $_SESSION['plan_change_notified'] = true; // Prevent showing again in same session
+    echo '<!DOCTYPE html><html><head><title>Plan Changed</title><style>body{font-family:Arial;text-align:center;padding:50px;} .notification{background:#d4edda;border:1px solid #c3e6cb;color:#155724;padding:20px;border-radius:8px;max-width:500px;margin:0 auto;}</style></head><body>';
+    echo '<div class="notification">';
+    echo '<h2>🎉 Plan Successfully Upgraded!</h2>';
+    echo '<p>Your plan has been upgraded. Please logout and login again for the changes to take effect.</p>';
+    echo '<a href="logout.php" style="background:#28a745;color:white;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block;margin-top:15px;">Logout Now</a>';
+    echo '</div>';
+    echo '</body></html>';
+    exit;
+}
+
+// Store original plan for this session (only if not already set)
+if (!isset($_SESSION['original_plan'])) {
+    $_SESSION['original_plan'] = $currentUser['plan'];
+}
+
 if ($currentUser['plan'] === 'NONE') {
-    header('Location: plan_selection.php');
+    $pendingDeposit = getPendingDeposit($currentUser['id']);
+    if ($pendingDeposit) {
+        header('Location: waiting_for_approval.php');
+    } else {
+        header('Location: plan_selection.php');
+    }
     exit;
 }
 
@@ -19,43 +43,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['topup_submit'])) {
     if (!$phone || !$amount || $amount <= 0) {
         setFlashMessage('error', 'Enter a valid phone number and amount.');
     } else {
-        addWallet($pdo, $currentUser['id'], $amount);
-        setFlashMessage('success', 'Top-up successful. Wallet updated by ' . number_format($amount, 2) . ' KES.');
-        header('Location: ' . str_replace('.php', '', $_SERVER['PHP_SELF']));
+        $result = createPendingDeposit($currentUser['id'], $amount, null, $phone);
+        setFlashMessage('success', 'Deposit request created. Please send the money to 0701144109 and wait for admin approval.');
+        header('Location: waiting_for_approval.php');
         exit;
-    }
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_plan'])) {
-    $newPlan = $_POST['new_plan'];
-    $phone = trim($_POST['change_phone'] ?? '');
-    $costs = [
-        'REGULAR' => 20,
-        'PREMIUM' => 50,
-        'PREMIUM+' => 100
-    ];
-    if (empty($phone) || !isset($costs[$newPlan])) {
-        setFlashMessage('error', 'Invalid plan or phone number.');
-    } else {
-        $cost = $costs[$newPlan];
-        $paymentResult = initiateMpesaPayment($phone, $cost, 'Spin Boost plan change to ' . $newPlan);
-        if ($paymentResult['success']) {
-            changeUserPlan($currentUser['id'], $newPlan);
-            setFlashMessage('success', $paymentResult['message'] . ' Your plan has been changed.');
-            header('Location: ' . str_replace('.php', '', $_SERVER['PHP_SELF']));
-            exit;
-        } else {
-            setFlashMessage('error', 'Payment prompt failed.');
-        }
     }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_submit'])) {
     $amount = filter_var($_POST['withdraw_amount'] ?? 0, FILTER_VALIDATE_FLOAT);
-    if ($amount <= 0) {
-        setFlashMessage('error', 'Enter a valid withdrawal amount.');
+    $phone = trim($_POST['withdraw_phone'] ?? '');
+    if ($amount <= 0 || empty($phone)) {
+        setFlashMessage('error', 'Enter a valid withdrawal amount and phone number.');
     } else {
-        $result = withdrawMoney($currentUser['id'], $amount);
+        $result = withdrawMoney($currentUser['id'], $amount, $phone);
         if ($result['success']) {
             setFlashMessage('success', $result['message']);
         } else {
@@ -76,6 +77,9 @@ $basePath = rtrim(dirname($_SERVER['PHP_SELF']), '\/');
 $referralLink = $scheme . '://' . $host . $basePath . '/?ref=' . urlencode($currentUser['referral_code']);
 $referralData = getReferralEarnings($currentUser['id']);
 $withdrawalHistory = getWithdrawalHistory($currentUser['id']);
+$depositHistory = getDepositHistory($currentUser['id']);
+$totalDeposited = getTotalDeposited($currentUser['id']);
+$totalWinnings = getTotalWinnings($currentUser['id']);
 $flash = getFlashMessage();
 ?>
 <!DOCTYPE html>
@@ -157,8 +161,9 @@ $flash = getFlashMessage();
         </div>
         <nav class="menu-nav">
             <button class="menu-item" data-section="referrals">Referrals</button>
-            <button class="menu-item" data-section="change-plan">Change Plan</button>
+            <button class="menu-item" data-section="financials">Financials</button>
             <button class="menu-item" data-section="withdraw">Withdraw</button>
+            <button class="menu-item" data-section="plan-change">Change Plan</button>
             <button class="menu-item" data-section="help">Help</button>
             <a href="analytics.php" class="menu-item" style="text-decoration: none; color: inherit;">📊 Game Mechanics</a>
         </nav>
@@ -211,29 +216,88 @@ $flash = getFlashMessage();
                     </tbody>
                 </table>
             </div>
-            <div class="menu-section" id="change-plan-section">
-                <h3>Change Plan</h3>
-                <form method="post" class="topup-form">
-                    <label for="new_plan">New Plan</label>
-                    <select name="new_plan" id="new_plan" required>
-                        <option value="REGULAR">Regular - 20 KES</option>
-                        <option value="PREMIUM">Premium - 50 KES</option>
-                        <option value="PREMIUM+">Premium+ - 100 KES</option>
-                    </select>
-                    <label for="change_phone">Phone Number</label>
-                    <input type="tel" id="change_phone" name="change_phone" placeholder="07XXXXXXXX" required>
-                    <button type="submit" name="change_plan" class="primary-btn">Change Plan</button>
-                </form>
+            <div class="menu-section" id="financials-section">
+                <h3>Financials</h3>
+                <div class="referral-summary">
+                    <div class="summary-item">
+                        <span class="summary-label">Total Deposited:</span>
+                        <span class="summary-value"><?php echo number_format($totalDeposited, 2); ?> KES</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Total Won:</span>
+                        <span class="summary-value"><?php echo number_format($totalWinnings, 2); ?> KES</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Current Balance:</span>
+                        <span class="summary-value"><?php echo number_format($currentUser['wallet'], 2); ?> KES</span>
+                    </div>
+                </div>
+                <h4>Deposit History</h4>
+                <table class="referral-table">
+                    <thead>
+                        <tr>
+                            <th>Amount</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($depositHistory)): ?>
+                            <tr>
+                                <td colspan="4">No deposit history yet.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($depositHistory as $deposit): ?>
+                                <tr>
+                                    <td><?php echo number_format($deposit['amount'], 2); ?></td>
+                                    <td><?php echo $deposit['plan_id'] ? 'Plan: ' . htmlspecialchars($deposit['plan_id']) : 'Wallet deposit'; ?></td>
+                                    <td><?php echo htmlspecialchars(ucfirst($deposit['status'])); ?></td>
+                                    <td><?php echo date('M d, Y H:i', strtotime($deposit['created_at'])); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+                <h4>Withdrawal History</h4>
+                <table class="referral-table">
+                    <thead>
+                        <tr>
+                            <th>Amount</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($withdrawalHistory)): ?>
+                            <tr>
+                                <td colspan="4">No withdrawals yet.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($withdrawalHistory as $withdrawal): ?>
+                                <tr>
+                                    <td><?php echo number_format($withdrawal['amount'], 2); ?></td>
+                                    <td><?php echo htmlspecialchars($withdrawal['phone'] ?? '-'); ?></td>
+                                    <td><?php echo htmlspecialchars(ucfirst($withdrawal['status'])); ?></td>
+                                    <td><?php echo date('M d, Y H:i', strtotime($withdrawal['created_at'])); ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
             </div>
             <div class="menu-section" id="withdraw-section">
                 <h3>Withdraw</h3>
                 <form method="post" class="topup-form">
                     <label for="withdraw_amount">Amount (Min 5 KES)</label>
                     <input type="number" id="withdraw_amount" name="withdraw_amount" min="5" step="1" required>
+                    <label for="withdraw_phone">Phone Number</label>
+                    <input type="tel" id="withdraw_phone" name="withdraw_phone" placeholder="07XXXXXXXX" required>
                     <button type="submit" name="withdraw_submit" class="primary-btn">Withdraw</button>
                 </form>
                 <h4>Withdrawal History</h4>
-                <table class="withdrawal-table">
+                <table class="referral-table">
                     <thead>
                         <tr>
                             <th>Amount (KES)</th>
@@ -258,6 +322,25 @@ $flash = getFlashMessage();
                     </tbody>
                 </table>
             </div>
+            <div class="menu-section" id="plan-change-section">
+                <h3>Change Plan</h3>
+                <p>Upgrade or change your plan. Select a new plan and enter your phone number. Send the payment to 0701144109 after submitting.</p>
+                <form method="post" class="topup-form" action="plan_selection.php">
+                    <label for="plan">Select Plan</label>
+                    <select id="plan" name="plan" required>
+                        <option value="">Choose a plan...</option>
+                        <option value="REGULAR" <?php echo $currentUser['plan'] === 'REGULAR' ? 'disabled' : ''; ?>>Regular - 20 KES (5 spins/day, 3 puzzles/day)</option>
+                        <option value="PREMIUM" <?php echo $currentUser['plan'] === 'PREMIUM' ? 'disabled' : ''; ?>>Premium - 50 KES (20 spins/day, 25 puzzles/day)</option>
+                        <option value="PREMIUM+" <?php echo $currentUser['plan'] === 'PREMIUM+' ? 'disabled' : ''; ?>>Premium+ - 100 KES (Unlimited)</option>
+                    </select>
+                    <label for="phone">Phone Number</label>
+                    <input type="tel" id="phone" name="phone" placeholder="07XXXXXXXX or 2547XXXXXXXX" value="<?php echo htmlspecialchars($currentUser['phone']); ?>" required>
+                    <button type="submit" class="primary-btn">Request Plan Change</button>
+                </form>
+                <div class="info-box" style="margin-top: 15px; background: #f8f9fa; border-left: 4px solid #667eea; padding: 10px; border-radius: 4px; font-size: 14px;">
+                    <strong>Note:</strong> After admin approval, you will be logged out and need to login again for the plan change to take effect. Your dashboard access remains available during the approval process.
+                </div>
+            </div>
             <div class="menu-section" id="help-section">
                 <h3>Help</h3>
                 <div class="faq">
@@ -279,7 +362,7 @@ $flash = getFlashMessage();
                     </div>
                     <div class="faq-item">
                         <button class="faq-question">How to change plan?</button>
-                        <div class="faq-answer">Use the Change Plan section in the menu. Payment via MPESA.</div>
+                        <div class="faq-answer">Use the Plan Selection page. All plan purchases are reviewed manually by admin.</div>
                     </div>
                 </div>
                 <p>Still need help? <a href="https://wa.me/254701144109" target="_blank" class="whatsapp-link">Message Support on WhatsApp</a></p>

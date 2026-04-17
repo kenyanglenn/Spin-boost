@@ -13,27 +13,39 @@ require_once 'db.php';
 // Configuration
 define('TARGET_RTP', 0.55); // 55% Return to Player = 45% house edge
 define('MAX_PAYOUT_PER_SPIN', 500);
+define('MAX_SESSION_PAYOUT', 1000); // Cap total session winnings to protect house edge
 define('LOSING_STREAK_THRESHOLD', 3);
 define('LOW_BALANCE_THRESHOLD', 50);
 define('NEW_USER_THRESHOLD_DAYS', 7);
+
+function secureRand($min, $max) {
+    try {
+        return random_int($min, $max);
+    } catch (Exception $e) {
+        return mt_rand($min, $max);
+    }
+}
 
 /**
  * Base weighted probability system
  * Returns multiplier (0-9) based on controlled probabilities
  */
 function getBaseMultiplier() {
-    $rand = mt_rand(1, 10000);
-    
-    // Weighted distribution (in basis points) - Adjusted for easier X2/X3
-    if ($rand <= 5800)   return 0;      // 58.00% (reduced losses)
-    if ($rand <= 7300)   return 1;      // 15.00%
-    if ($rand <= 8500)   return 2;      // 12.00% (increased from 10%)
-    if ($rand <= 9400)   return 3;      // 9.00% (increased from 7%)
-    if ($rand <= 9700)   return 4;      // 3.00% (reduced from 4%)
-    if ($rand <= 9900)   return 5;      // 2.00% (reduced from 2.5%)
-    if ($rand <= 10000)  return 6;      // 1.00% (reduced from 1%)
-    // Removed X7-X9 to simplify and increase X2/X3 frequency
-    return 6; // Fallback to X6
+    $rand = secureRand(1, 10000);
+
+    // Weighted distribution in basis points for all 10 wheel segments
+    if ($rand <= 6000)   return 0;      // 60.00% consolation / loss
+    if ($rand <= 8000)   return 1;      // 20.00% low win
+    if ($rand <= 9000)   return 2;      // 10.00% low-mid win
+    if ($rand <= 9400)   return 3;      // 4.00% mid win
+    if ($rand <= 9650)   return 4;      // 2.50% mid-high win
+    if ($rand <= 9800)   return 5;      // 1.50% high win
+    if ($rand <= 9880)   return 6;      // 0.80% bigger win
+    if ($rand <= 9925)   return 7;      // 0.45% premium win
+    if ($rand <= 9955)   return 8;      // 0.30% jackpot-level win
+    if ($rand <= 10000)  return 9;      // 0.45% top jackpot
+
+    return 0; // Fallback to loss
 }
 
 /**
@@ -124,14 +136,14 @@ function applyPsychologicalAdjustment($pdo, $userId, $baseMultiplier, $userWalle
     $streak = getUserSpinStreak($pdo, $userId);
     if ($streak >= LOSING_STREAK_THRESHOLD) {
         // Force a small win on streak
-        if (mt_rand(1, 100) <= 70) {
-            return mt_rand(1, 2); // Force x1 or x2
+        if (secureRand(1, 100) <= 70) {
+            return secureRand(1, 2); // Force x1 or x2
         }
     }
     
     // LOW BALANCE BOOST
     if ($userWallet < LOW_BALANCE_THRESHOLD && $userWallet > 0) {
-        if (mt_rand(1, 100) <= 50) {
+        if (secureRand(1, 100) <= 50) {
             return 1; // Give them a small win to keep playing
         }
     }
@@ -148,7 +160,7 @@ function applyStakePenalty($baseMultiplier, $stake) {
     if ($stake > 100) {
         if ($baseMultiplier >= 5) {
             // 40% chance to reduce to lower multiplier
-            if (mt_rand(1, 100) <= 40) {
+            if (secureRand(1, 100) <= 40) {
                 return max(0, $baseMultiplier - 2);
             }
         }
@@ -168,14 +180,24 @@ function getSpinResult($pdo, $userId, $stake) {
         return ['error' => 'User not found'];
     }
     
+    // Initialize session payout tracking if needed
+    if (!isset($_SESSION['spin_session_payout'])) {
+        $_SESSION['spin_session_payout'] = 0;
+    }
+
     // Step 1: Base probability
     $multiplier = getBaseMultiplier();
+
+    // Step 1a: Enforce session payout cap if threshold exceeded
+    if ($_SESSION['spin_session_payout'] >= MAX_SESSION_PAYOUT) {
+        $multiplier = secureRand(1, 100) <= 20 ? 1 : 0;
+    }
     
     // Step 2: Apply RTP adjustment
     $rtpAdjustment = getUserRTPAdjustment($pdo, $userId);
     if ($rtpAdjustment < 1.0 && $multiplier > 0) {
         // Reduce win probability if user has won too much
-        if (mt_rand(1, 100) <= (100 * (1 - $rtpAdjustment))) {
+        if (secureRand(1, 100) <= (int) (100 * (1 - $rtpAdjustment))) {
             $multiplier = 0;
         }
     }
@@ -196,9 +218,9 @@ function getSpinResult($pdo, $userId, $stake) {
     
     // Step 7: Determine near-miss target (for visual effect)
     $nearMissTarget = null;
-    if ($multiplier == 0 && mt_rand(1, 100) <= 40) {
+    if ($multiplier == 0 && secureRand(1, 100) <= 40) {
         // Create illusion of near-miss
-        $nearMissTarget = mt_rand(7, 9);
+        $nearMissTarget = secureRand(7, 9);
     }
     
     return [

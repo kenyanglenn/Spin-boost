@@ -3,9 +3,9 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Database connection settings - Railway compatible
+// Database connection settings
 $DB_HOST = getenv('MYSQLHOST') ?: '127.0.0.1';
-$DB_NAME = getenv('MYSQLDATABASE') ?: 'railway';
+$DB_NAME = getenv('MYSQLDATABASE') ?: 'spinboost';
 $DB_USER = getenv('MYSQLUSER') ?: 'root';
 $DB_PASS = getenv('MYSQLPASSWORD') ?: '';
 $DB_PORT = getenv('MYSQLPORT') ?: '3306';
@@ -20,8 +20,96 @@ function getPDO() {
             PDO::ATTR_EMULATE_PREPARES => false,
         ];
         $pdo = new PDO($dsn, $DB_USER, $DB_PASS, $options);
+        ensureDepositSchema($pdo);
+        ensureWithdrawalSchema($pdo);
+        ensureUserSchema($pdo);
     }
     return $pdo;
+}
+
+function ensureDepositSchema(PDO $pdo) {
+    try {
+        $tableExists = $pdo->query("SHOW TABLES LIKE 'deposits'")->fetch();
+        if (!$tableExists) {
+            return;
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'plan_id'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE deposits ADD COLUMN plan_id VARCHAR(50) NULL COMMENT 'Plan type if this is for plan purchase (REGULAR, PREMIUM, PREMIUM+)' AFTER amount");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'admin_notes'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE deposits ADD COLUMN admin_notes TEXT COMMENT 'Admin notes for approval or rejection' AFTER status");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'approved_by'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE deposits ADD COLUMN approved_by INT NULL COMMENT 'Admin user ID who approved/rejected' AFTER admin_notes");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'approved_at'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE deposits ADD COLUMN approved_at TIMESTAMP NULL COMMENT 'When admin approved or rejected' AFTER approved_by");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'payment_phone'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE deposits ADD COLUMN payment_phone VARCHAR(20) NULL COMMENT 'Phone number provided by user for the payment request' AFTER plan_id");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM deposits LIKE 'status'")->fetch();
+        if ($column && strpos($column['Type'], "enum('pending','approved','rejected')") === false) {
+            $pdo->exec("UPDATE deposits SET status = 'approved' WHERE status = 'completed'");
+            $pdo->exec("UPDATE deposits SET status = 'rejected' WHERE status IN ('failed','expired')");
+            $pdo->exec("ALTER TABLE deposits MODIFY COLUMN status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending'");
+        }
+    } catch (Exception $e) {
+        error_log('Deposit schema migration failed: ' . $e->getMessage());
+    }
+}
+
+function ensureWithdrawalSchema(PDO $pdo) {
+    try {
+        $tableExists = $pdo->query("SHOW TABLES LIKE 'withdrawals'")->fetch();
+        if (!$tableExists) {
+            return;
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM withdrawals LIKE 'phone'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE withdrawals ADD COLUMN phone VARCHAR(20) NULL AFTER amount");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM withdrawals LIKE 'admin_notes'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE withdrawals ADD COLUMN admin_notes TEXT NULL AFTER status");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM withdrawals LIKE 'processed_by'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE withdrawals ADD COLUMN processed_by INT NULL AFTER admin_notes");
+        }
+
+        $column = $pdo->query("SHOW COLUMNS FROM withdrawals LIKE 'processed_at'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE withdrawals ADD COLUMN processed_at TIMESTAMP NULL AFTER processed_by");
+        }
+    } catch (Exception $e) {
+        error_log('Withdrawal schema migration failed: ' . $e->getMessage());
+    }
+}
+
+function ensureUserSchema(PDO $pdo) {
+    try {
+        $column = $pdo->query("SHOW COLUMNS FROM users LIKE 'is_admin'")->fetch();
+        if (!$column) {
+            $pdo->exec("ALTER TABLE users ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER plan");
+        }
+    } catch (Exception $e) {
+        error_log('User schema migration failed: ' . $e->getMessage());
+    }
 }
 
 function setFlashMessage($type, $text) {
@@ -55,16 +143,6 @@ function generateReferralCode() {
     return bin2hex(random_bytes(10));
 }
 
-function registerUser($username, $phone, $password, $referred_by = null) {
-    $pdo = getPDO();
-    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-    $referralCode = generateReferralCode();
-    
-    $stmt = $pdo->prepare('INSERT INTO users (username, phone, password, referral_code, referred_by, plan) VALUES (?, ?, ?, ?, ?, ?)');
-    $stmt->execute([$username, $phone, $hashedPassword, $referralCode, $referred_by, 'NONE']);
-    return $pdo->lastInsertId();
-}
-
 function loginUser($usernameOrPhone, $password) {
     $pdo = getPDO();
     $stmt = $pdo->prepare('SELECT * FROM users WHERE username = ? OR phone = ? LIMIT 1');
@@ -77,8 +155,71 @@ function loginUser($usernameOrPhone, $password) {
     return false;
 }
 
+function validateLogin($usernameOrPhone, $password) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT * FROM users WHERE username = ? OR phone = ? LIMIT 1');
+    $stmt->execute([$usernameOrPhone, $usernameOrPhone]);
+    $user = $stmt->fetch();
+    
+    if (!$user) {
+        return ['success' => false, 'message' => 'Username or phone not found.', 'type' => 'username'];
+    }
+    
+    if (!password_verify($password, $user['password'])) {
+        return ['success' => false, 'message' => 'Password is incorrect.', 'type' => 'password'];
+    }
+    
+    return ['success' => true, 'user' => $user];
+}
+
 function logoutUser() {
-    unset($_SESSION['user_id']);
+    // Clear all session data to prevent stale data
+    session_unset();
+    session_destroy();
+    session_start();
+}
+
+function getCurrentAdmin() {
+    if (!isset($_SESSION['admin_id'])) {
+        return null;
+    }
+    return getUserById($_SESSION['admin_id']);
+}
+
+function countAdmins() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE is_admin = 1');
+    $stmt->execute();
+    return (int) $stmt->fetchColumn();
+}
+
+function createAdminUser($username, $phone, $password) {
+    if (countAdmins() >= 5) {
+        throw new Exception('Maximum number of admins reached.');
+    }
+
+    $pdo = getPDO();
+    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+    $referralCode = generateReferralCode();
+
+    $stmt = $pdo->prepare('INSERT INTO users (username, phone, password, referral_code, referred_by, plan, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$username, $phone, $hashedPassword, $referralCode, null, 'NONE', 1]);
+    return $pdo->lastInsertId();
+}
+
+function isAdminUser($userId) {
+    $user = getUserById($userId);
+    return $user && !empty($user['is_admin']);
+}
+
+function registerUser($username, $phone, $password, $referred_by = null, $isAdmin = 0) {
+    $pdo = getPDO();
+    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+    $referralCode = generateReferralCode();
+    
+    $stmt = $pdo->prepare('INSERT INTO users (username, phone, password, referral_code, referred_by, plan, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$username, $phone, $hashedPassword, $referralCode, $referred_by, 'NONE', $isAdmin]);
+    return $pdo->lastInsertId();
 }
 
 function updateUserPlan($userId, $plan) {
@@ -87,69 +228,221 @@ function updateUserPlan($userId, $plan) {
     $stmt->execute([$plan, $userId]);
 }
 
-function initiateMpesaPayment($phone, $amount, $description = 'Spin Boost plan purchase') {
-    // IntaSend STK Push integration
-    require_once 'payment_config.php';
+/**
+ * MANUAL APPROVAL SYSTEM
+ * Creates a pending deposit/plan request for manual admin approval
+ */
+function createPendingDeposit($userId, $amount, $planId = null, $paymentPhone = null) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare(
+        'INSERT INTO deposits (user_id, amount, plan_id, payment_phone, provider, provider_reference, your_reference, verification_timestamp, status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([$userId, $amount, $planId, $paymentPhone, null, null, null, null, 'pending']);
+    return $pdo->lastInsertId();
+}
+
+function getDepositHistory($userId) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT * FROM deposits WHERE user_id = ? ORDER BY created_at DESC');
+    $stmt->execute([$userId]);
+    return $stmt->fetchAll();
+}
+
+function getPendingWithdrawals() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare(
+        'SELECT w.*, u.username, u.phone AS user_phone, u.plan
+         FROM withdrawals w
+         JOIN users u ON w.user_id = u.id
+         WHERE w.status = ?
+         ORDER BY w.created_at DESC'
+    );
+    $stmt->execute(['pending']);
+    return $stmt->fetchAll();
+}
+
+function approveWithdrawal($withdrawalId, $adminUserId, $adminNotes = '') {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT * FROM withdrawals WHERE id = ? LIMIT 1');
+    $stmt->execute([$withdrawalId]);
+    $withdrawal = $stmt->fetch();
+    if (!$withdrawal || $withdrawal['status'] !== 'pending') {
+        return ['success' => false, 'message' => 'Withdrawal not found or not pending'];
+    }
+
+    $stmt = $pdo->prepare(
+        'UPDATE withdrawals SET status = ?, admin_notes = ?, processed_by = ?, processed_at = NOW() WHERE id = ?'
+    );
+    $stmt->execute(['completed', $adminNotes, $adminUserId, $withdrawalId]);
+
+    return ['success' => true, 'message' => 'Withdrawal approved successfully'];
+}
+
+function rejectWithdrawal($withdrawalId, $adminUserId, $adminNotes = '') {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT * FROM withdrawals WHERE id = ? LIMIT 1');
+    $stmt->execute([$withdrawalId]);
+    $withdrawal = $stmt->fetch();
+    if (!$withdrawal || $withdrawal['status'] !== 'pending') {
+        return ['success' => false, 'message' => 'Withdrawal not found or not pending'];
+    }
+
+    try {
+        $pdo->beginTransaction();
+        $stmt = $pdo->prepare(
+            'UPDATE withdrawals SET status = ?, admin_notes = ?, processed_by = ?, processed_at = NOW() WHERE id = ?'
+        );
+        $stmt->execute(['failed', $adminNotes, $adminUserId, $withdrawalId]);
+
+        addWallet($pdo, $withdrawal['user_id'], $withdrawal['amount']);
+        $pdo->commit();
+        return ['success' => true, 'message' => 'Withdrawal rejected and funds returned to wallet'];
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        error_log('Withdrawal rejection error: ' . $e->getMessage());
+        return ['success' => false, 'message' => 'Unable to reject withdrawal at this time'];
+    }
+}
+
+/**
+ * Check if user has an approved deposit
+ * Returns true if user has at least one approved deposit, false otherwise
+ */
+function hasApprovedDeposit($userId) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM deposits WHERE user_id = ? AND status = ?');
+    $stmt->execute([$userId, 'approved']);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+/**
+ * Get user's pending deposit approval status
+ * Returns the pending deposit record if exists
+ */
+function getPendingDeposit($userId) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT * FROM deposits WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1');
+    $stmt->execute([$userId, 'pending']);
+    return $stmt->fetch();
+}
+
+/**
+ * Get all pending deposits for admin review
+ */
+function getPendingDeposits() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare(
+        'SELECT d.*, u.username, u.phone, u.plan 
+         FROM deposits d 
+         JOIN users u ON d.user_id = u.id 
+         WHERE d.status = ? 
+         ORDER BY d.created_at DESC'
+    );
+    $stmt->execute(['pending']);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Approve a deposit and activate user's plan or wallet
+ */
+function approveDeposit($depositId, $adminUserId, $adminNotes = '') {
+    $pdo = getPDO();
     
-    $payload = [
-        'phone_number' => $phone,
-        'amount' => $amount,
-        'currency' => PAYMENT_CURRENCY,
-        'api_ref' => 'LEGACY_' . bin2hex(random_bytes(8))
-    ];
+    // Get deposit details
+    $stmt = $pdo->prepare('SELECT * FROM deposits WHERE id = ?');
+    $stmt->execute([$depositId]);
+    $deposit = $stmt->fetch();
+    
+    if (!$deposit) {
+        return ['success' => false, 'message' => 'Deposit not found'];
+    }
+    
+    // Begin transaction
+    $pdo->beginTransaction();
+    try {
+        // Update deposit status
+        $stmt = $pdo->prepare(
+            'UPDATE deposits SET status = ?, approved_by = ?, approved_at = NOW(), admin_notes = ? WHERE id = ?'
+        );
+        $stmt->execute(['approved', $adminUserId, $adminNotes, $depositId]);
+        
+        // If this was a plan purchase, activate the plan and expire session
+        if ($deposit['plan_id']) {
+            $stmt = $pdo->prepare('UPDATE users SET plan = ? WHERE id = ?');
+            $stmt->execute([$deposit['plan_id'], $deposit['user_id']]);
+            
+            // Add referral bonus if applicable
+            $user = getUserById($deposit['user_id']);
+            if ($user['referred_by']) {
+                $referrerId = getReferrerId($user['referred_by']);
+                if ($referrerId) {
+                    addReferralReward($referrerId, $deposit['plan_id']);
+                }
+            }
+            
+            // Note: Plan change notification is now handled by checking plan changes in spin.php
+        } else {
+            // If it's a wallet deposit, add to wallet
+            addWallet($pdo, $deposit['user_id'], $deposit['amount']);
+        }
+        
+        $pdo->commit();
+        return ['success' => true, 'message' => 'Deposit approved successfully'];
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        error_log('Deposit approval error: ' . $e->getMessage());
+        return ['success' => false, 'message' => 'Error processing approval'];
+    }
+}
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, INTASEND_BASE_URL . 'payment/stk-push/');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . INTASEND_SECRET_KEY
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+/**
+ * Reject a deposit request
+ */
+function rejectDeposit($depositId, $adminUserId, $adminNotes = '') {
+    $pdo = getPDO();
+    
+    $stmt = $pdo->prepare(
+        'UPDATE deposits SET status = ?, approved_by = ?, approved_at = NOW(), admin_notes = ? WHERE id = ?'
+    );
+    $stmt->execute(['rejected', $adminUserId, $adminNotes, $depositId]);
+    
+    return ['success' => true, 'message' => 'Deposit rejected'];
+}
 
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curl_error = curl_error($ch);
-    curl_close($ch);
-
-    error_log('Legacy Mpesa Payment STK Push - Code: ' . $http_code . ', Response: ' . $response);
-
-    if ($curl_error) {
-        error_log('IntaSend Curl Error: ' . $curl_error);
+/**
+ * Get approval status for a user (for display on waiting page)
+ */
+function getApprovalStatus($userId) {
+    $pdo = getPDO();
+    
+    // Check if user has any approved deposit
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM deposits WHERE user_id = ? AND status = ?');
+    $stmt->execute([$userId, 'approved']);
+    if ((int) $stmt->fetchColumn() > 0) {
+        return ['status' => 'approved', 'message' => 'Your deposit has been approved!'];
+    }
+    
+    // Check for pending deposit
+    $stmt = $pdo->prepare('SELECT * FROM deposits WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1');
+    $stmt->execute([$userId, 'pending']);
+    $pending = $stmt->fetch();
+    if ($pending) {
+        return ['status' => 'pending', 'message' => 'Your request is under review'];
+    }
+    
+    // Check for rejected deposit
+    $stmt = $pdo->prepare('SELECT * FROM deposits WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1');
+    $stmt->execute([$userId, 'rejected']);
+    $rejected = $stmt->fetch();
+    if ($rejected) {
         return [
-            'success' => false,
-            'message' => 'Payment service temporarily unavailable'
+            'status' => 'rejected', 
+            'message' => 'Your request was rejected. Reason: ' . ($rejected['admin_notes'] ?: 'No reason provided')
         ];
     }
-
-    if ($http_code !== 200 && $http_code !== 201) {
-        error_log('IntaSend HTTP Error ' . $http_code . ': ' . $response);
-        return [
-            'success' => false,
-            'message' => 'Payment initiation failed'
-        ];
-    }
-
-    $data = json_decode($response, true);
-
-    if (!$data) {
-        error_log('IntaSend Invalid JSON Response: ' . $response);
-        return [
-            'success' => false,
-            'message' => 'Invalid payment response'
-        ];
-    }
-
-    // STK Push initiated successfully
-    return [
-        'success' => true,
-        'message' => 'STK Push sent to ' . htmlspecialchars($phone) . ' for ' . number_format($amount, 2) . ' KES.',
-        'checkoutRequestID' => $data['id'] ?? bin2hex(random_bytes(5)),
-    ];
+    
+    return ['status' => 'no_request', 'message' => 'No deposit request found'];
 }
 
 function addWallet($pdo, $userId, $amount) {
@@ -210,6 +503,150 @@ function updateWallet($pdo, $userId, $amount) {
     $stmt->execute([$amount, $userId]);
 }
 
+// Admin functions for paginated views
+function getAllUsers($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT id, username, phone, wallet, plan, created_at, is_admin FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    );
+    $stmt->execute([$limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getTotalUsers() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM users');
+    $stmt->execute();
+    return (int) $stmt->fetchColumn();
+}
+
+function getTopSpinWinners($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT u.username, u.plan, 
+                MAX(s.win_amount) as highest_single_spin,
+                COUNT(s.id) as lifetime_spins,
+                SUM(s.stake) as total_staked
+         FROM users u
+         LEFT JOIN spins s ON u.id = s.user_id
+         GROUP BY u.id, u.username, u.plan
+         HAVING lifetime_spins > 0
+         ORDER BY highest_single_spin DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute([$limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getTopPuzzleWinners($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT u.username, u.plan,
+                MAX(p.reward) as highest_single_puzzle,
+                COUNT(p.id) as lifetime_puzzles,
+                SUM(p.stake) as total_staked
+         FROM users u
+         LEFT JOIN word_puzzles p ON u.id = p.user_id
+         WHERE p.status = "win"
+         GROUP BY u.id, u.username, u.plan
+         HAVING lifetime_puzzles > 0
+         ORDER BY highest_single_puzzle DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute([$limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getAllDeposits($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT d.*, u.username, u.phone as user_phone
+         FROM deposits d
+         JOIN users u ON d.user_id = u.id
+         ORDER BY d.created_at DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute([$limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getTotalDeposits() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM deposits');
+    $stmt->execute();
+    return (int) $stmt->fetchColumn();
+}
+
+function getAllWithdrawals($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT w.*, u.username, u.phone as user_phone
+         FROM withdrawals w
+         JOIN users u ON w.user_id = u.id
+         ORDER BY w.created_at DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute([$limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getTotalWithdrawals() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM withdrawals');
+    $stmt->execute();
+    return (int) $stmt->fetchColumn();
+}
+
+function getPendingDepositsPaginated($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT d.*, u.username, u.phone, u.plan 
+         FROM deposits d 
+         JOIN users u ON d.user_id = u.id 
+         WHERE d.status = ? 
+         ORDER BY d.created_at DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute(['pending', $limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getPendingWithdrawalsPaginated($page = 1, $limit = 10) {
+    $pdo = getPDO();
+    $offset = ($page - 1) * $limit;
+    $stmt = $pdo->prepare(
+        'SELECT w.*, u.username, u.phone AS user_phone, u.plan
+         FROM withdrawals w
+         JOIN users u ON w.user_id = u.id
+         WHERE w.status = ?
+         ORDER BY w.created_at DESC
+         LIMIT ? OFFSET ?'
+    );
+    $stmt->execute(['pending', $limit, $offset]);
+    return $stmt->fetchAll();
+}
+
+function getTotalPendingDeposits() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM deposits WHERE status = ?');
+    $stmt->execute(['pending']);
+    return (int) $stmt->fetchColumn();
+}
+
+function getTotalPendingWithdrawals() {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM withdrawals WHERE status = ?');
+    $stmt->execute(['pending']);
+    return (int) $stmt->fetchColumn();
+}
+
+
 function recordSpin($pdo, $userId, $stake, $multiplier, $winAmount) {
     $stmt = $pdo->prepare('INSERT INTO spins (user_id, stake, multiplier, win_amount, created_at) VALUES (?, ?, ?, ?, NOW())');
     $stmt->execute([$userId, $stake, $multiplier, $winAmount]);
@@ -268,9 +705,12 @@ function changeUserPlan($userId, $newPlan) {
     $stmt->execute([$newPlan, $userId]);
 }
 
-function withdrawMoney($userId, $amount) {
+function withdrawMoney($userId, $amount, $phone) {
     if ($amount < 5) {
         return ['success' => false, 'message' => 'Minimum withdrawal is 5 KES.'];
+    }
+    if (empty($phone)) {
+        return ['success' => false, 'message' => 'Phone number is required for withdrawal.' ];
     }
     $pdo = getPDO();
     $user = getUserById($userId);
@@ -279,16 +719,42 @@ function withdrawMoney($userId, $amount) {
     }
     addWallet($pdo, $userId, -$amount);
     // Record withdrawal
-    $stmt = $pdo->prepare('INSERT INTO withdrawals (user_id, amount, status) VALUES (?, ?, ?)');
-    $stmt->execute([$userId, $amount, 'pending']);
-    return ['success' => true, 'message' => 'Withdrawal of ' . number_format($amount, 2) . ' KES initiated.'];
+    $stmt = $pdo->prepare('INSERT INTO withdrawals (user_id, amount, phone, status) VALUES (?, ?, ?, ?)');
+    $stmt->execute([$userId, $amount, $phone, 'pending']);
+    return ['success' => true, 'message' => 'Withdrawal of ' . number_format($amount, 2) . ' KES initiated and is pending admin approval.'];
 }
 
 function getWithdrawalHistory($userId) {
     $pdo = getPDO();
-    $stmt = $pdo->prepare('SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC');
+    $stmt = $pdo->prepare('SELECT amount, phone, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC');
     $stmt->execute([$userId]);
     return $stmt->fetchAll();
+}
+
+function getTotalDeposited($userId) {
+    $pdo = getPDO();
+    $stmt = $pdo->prepare('SELECT SUM(amount) as total FROM deposits WHERE user_id = ? AND status = "approved"');
+    $stmt->execute([$userId]);
+    $result = $stmt->fetch();
+    return $result['total'] ?? 0;
+}
+
+function getTotalWinnings($userId) {
+    $pdo = getPDO();
+    
+    // Get spin winnings
+    $stmt = $pdo->prepare('SELECT SUM(win_amount) as spin_wins FROM spins WHERE user_id = ?');
+    $stmt->execute([$userId]);
+    $spinResult = $stmt->fetch();
+    $spinWins = $spinResult['spin_wins'] ?? 0;
+    
+    // Get puzzle winnings
+    $stmt = $pdo->prepare('SELECT SUM(reward) as puzzle_wins FROM word_puzzles WHERE user_id = ? AND status = "win"');
+    $stmt->execute([$userId]);
+    $puzzleResult = $stmt->fetch();
+    $puzzleWins = $puzzleResult['puzzle_wins'] ?? 0;
+    
+    return $spinWins + $puzzleWins;
 }
 
 /**

@@ -69,16 +69,35 @@ function updateUsageCounts(data) {
     }
 }
 
-function rotateWheelToSegment(index) {
+function secureRandom() {
+    if (window.crypto && window.crypto.getRandomValues) {
+        const array = new Uint32Array(1);
+        window.crypto.getRandomValues(array);
+        return array[0] / 0xFFFFFFFF;
+    }
+    return Math.random();
+}
+
+function rotateWheelToSegment(index, onComplete) {
     const segmentAngle = 360 / 10;
-    const target = 360 * 8 + (index * segmentAngle) + segmentAngle / 2;
-    spinWheel.style.transition = 'transform 3.2s cubic-bezier(0.22, 1, 0.36, 1)';
+    const extraSpins = 6 + Math.floor(secureRandom() * 6);
+    const target = 360 * extraSpins + (index * segmentAngle) + segmentAngle / 2;
+    const duration = 2.8 + secureRandom() * 0.8;
+    const easing = `cubic-bezier(${0.18 + secureRandom() * 0.1}, ${0.8 + secureRandom() * 0.08}, ${0.25 + secureRandom() * 0.08}, 1)`;
+
+    spinWheel.style.transition = `transform ${duration.toFixed(2)}s ${easing}`;
     spinWheel.style.transform = `rotate(-${target}deg)`;
-    spinWheel.addEventListener('transitionend', () => {
+
+    const handleTransitionEnd = () => {
         spinWheel.style.transition = 'none';
         const normalized = target % 360;
         spinWheel.style.transform = `rotate(-${normalized}deg)`;
-    }, { once: true });
+        if (typeof onComplete === 'function') {
+            onComplete();
+        }
+    };
+
+    spinWheel.addEventListener('transitionend', handleTransitionEnd, { once: true });
 }
 
 function fetchSpin() {
@@ -101,9 +120,7 @@ function fetchSpin() {
             spinNowBtn.disabled = false;
             return;
         }
-        rotateWheelToSegment(data.segmentIndex);
-        spinResultText.textContent = 'Spinning...';
-        setTimeout(() => {
+        rotateWheelToSegment(data.segmentIndex, () => {
             const newWallet = parseFloat(data.wallet).toFixed(2);
             updateWalletDisplay(newWallet);
             spinResultText.textContent = `Result: ${data.segmentLabel} — multiplier ×${data.multiplier}. Wallet: ${newWallet} KES.`;
@@ -114,7 +131,8 @@ function fetchSpin() {
             showPopup(title, `${message} Wallet balance: ${newWallet} KES.`, data.multiplier > 0 ? 'success' : 'info');
             spinInProgress = false;
             spinNowBtn.disabled = false;
-        }, 3400);
+        });
+        spinResultText.textContent = 'Spinning...';
     }).catch(() => {
         showPopup('Network error', 'Unable to contact server. Try again later.', 'error');
         spinInProgress = false;
@@ -256,72 +274,26 @@ const topupError = document.getElementById('topupError');
 const topupProcessing = document.getElementById('topupProcessing');
 
 if (topupForm) {
-    topupForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
+    topupForm.addEventListener('submit', (e) => {
         const phone = document.getElementById('topup_phone').value.trim();
         const amount = parseFloat(document.getElementById('topup_amount').value);
 
-        // Validate
         if (!phone || !amount) {
+            e.preventDefault();
             showToast('Please fill all fields', 'error');
             return;
         }
 
-        if (!/^254[0-9]{9}$/.test(phone)) {
-            showToast('Invalid phone format. Use 254712345678', 'error');
+        if (!/^(?:07[0-9]{8}|2547[0-9]{8})$/.test(phone)) {
+            e.preventDefault();
+            showToast('Invalid phone format. Use 07XXXXXXXX or 2547XXXXXXXX', 'error');
             return;
         }
 
         if (amount < 50 || amount > 100000) {
+            e.preventDefault();
             showToast('Amount must be between 50 and 100,000 KES', 'error');
             return;
-        }
-
-        // Show processing state
-        topupForm.style.display = 'none';
-        topupProcessing.style.display = 'block';
-        topupError.style.display = 'none';
-        topupSubmitBtn.disabled = true;
-
-        try {
-            // Call deposit handler to initiate payment
-            const response = await fetch('deposit_handler.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    amount: amount,
-                    phone: phone
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success && result.stk_push_initiated) {
-                // STK Push initiated successfully
-                topupForm.style.display = 'block';
-                topupProcessing.style.display = 'none';
-                topupSubmitBtn.disabled = false;
-                topupModal.classList.remove('active');
-                showToast('STK Push initiated! Please check your phone for the MPesa prompt to complete the deposit.', 'success');
-                
-                // Optionally refresh wallet balance after a delay
-                setTimeout(() => {
-                    window.location.reload();
-                }, 5000);
-            } else {
-                throw new Error(result.message || 'Failed to initiate payment');
-            }
-        } catch (error) {
-            // Show error and restore form
-            topupForm.style.display = 'block';
-            topupProcessing.style.display = 'none';
-            topupSubmitBtn.disabled = false;
-            topupError.style.display = 'block';
-            topupError.textContent = error.message || 'Payment initiation failed. Please try again.';
-            console.error('Payment error:', error);
         }
     });
 }

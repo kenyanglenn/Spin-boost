@@ -3,19 +3,19 @@
         <button class="close-btn" id="closeTopup">×</button>
         <div class="modal-content">
             <h2>Top Up Wallet</h2>
-            <p>Add funds to your wallet using mobile money (M-Pesa, Airtel Money)</p>
-            <form id="topupForm" class="topup-form">
+            <p>Request a manual wallet top-up request. Enter your phone and amount, then send the payment to 0701144109 after submitting.</p>
+            <form id="topupForm" class="topup-form" action="deposit_handler.php" method="post">
                 <div class="form-group">
                     <label for="topup_phone">Phone number</label>
-                    <input type="tel" id="topup_phone" name="topup_phone" placeholder="254712345678" pattern="^254[0-9]{9}$" required>
-                    <small style="color: #666;">Format: 254712345678 (Kenyan number)</small>
+                    <input type="tel" id="topup_phone" name="topup_phone" placeholder="07XXXXXXXX or 2547XXXXXXXX" required>
+                    <small style="color: #666;">Accepts 07XXXXXXXX or 2547XXXXXXXX format.</small>
                 </div>
                 <div class="form-group">
                     <label for="topup_amount">Amount (KES)</label>
                     <input type="number" id="topup_amount" name="topup_amount" placeholder="e.g., 100" min="50" step="10" required>
                     <small style="color: #666;">Minimum: KES 50 | Maximum: KES 100,000</small>
                 </div>
-                <button type="submit" class="primary-btn" id="topupSubmitBtn">Proceed to Payment</button>
+                <button type="submit" class="primary-btn" id="topupSubmitBtn">Request Deposit</button>
                 <div id="topupError" style="display:none; color: #dc2626; margin-top: 10px; padding: 10px; background: #fee2e2; border-radius: 5px;"></div>
             </form>
             <div id="topupProcessing" style="display:none; text-align: center;">

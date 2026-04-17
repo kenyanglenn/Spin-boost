@@ -1,6 +1,15 @@
 <?php
 require_once 'db.php';
 
+$currentAdmin = getCurrentAdmin();
+if ($currentAdmin) {
+    header('Location: admin_deposits.php');
+    exit;
+}
+
+$flash = null;
+$adminCount = countAdmins();
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $usernameOrPhone = trim($_POST['username_or_phone'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -11,46 +20,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $loginResult = validateLogin($usernameOrPhone, $password);
         if ($loginResult['success']) {
             $user = $loginResult['user'];
-            $_SESSION['user_id'] = $user['id'];
             
             if (isAdminUser($user['id'])) {
                 $_SESSION['admin_id'] = $user['id'];
                 header('Location: admin_deposits.php');
                 exit;
+            } else {
+                setFlashMessage('error', 'This account is not an admin account.');
             }
-
-            if ($user['plan'] === 'NONE') {
-                $pendingDeposit = getPendingDeposit($user['id']);
-                if ($pendingDeposit) {
-                    header('Location: waiting_for_approval.php');
-                } else {
-                    header('Location: plan_selection.php');
-                }
-                exit;
-            }
-
-            header('Location: spin.php');
-            exit;
         } else {
             setFlashMessage('error', $loginResult['message']);
         }
     }
+    $flash = getFlashMessage();
+} else {
+    $flash = getFlashMessage();
 }
-
-$flash = getFlashMessage();
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <title>Login - Spin Boost</title>
+    <title>Admin Login - Spin Boost</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="auth-container">
         <div class="auth-card">
-            <h2>Login</h2>
+            <h2>Admin Login</h2>
 
             <?php if ($flash): ?>
                 <div class="toast <?php echo $flash['type']; ?>"><?php echo htmlspecialchars($flash['text']); ?></div>
@@ -68,7 +66,13 @@ $flash = getFlashMessage();
                 <button type="submit" class="primary-btn">Login</button>
             </form>
 
-            <p class="auth-link">Don't have an account? <a href="register.php">Register here</a></p>
+            <?php if ($adminCount === 0): ?>
+                <p class="auth-link">No admin exists yet. <a href="admin_register.php">Create first admin</a></p>
+            <?php else: ?>
+                <p class="auth-link">Need an admin account? Contact an existing admin.</p>
+            <?php endif; ?>
+
+            <p class="auth-link">Back to <a href="index.php">home</a></p>
         </div>
     </div>
 

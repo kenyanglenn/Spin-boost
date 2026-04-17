@@ -8,38 +8,40 @@ if (!$currentUser) {
 }
 
 if ($currentUser['plan'] !== 'NONE') {
-    header('Location: spin.php');
+    // This is a plan change request
+    $isPlanChange = true;
+} else {
+    $isPlanChange = false;
+}
+
+$pendingDeposit = getPendingDeposit($currentUser['id']);
+if ($pendingDeposit && $pendingDeposit['plan_id']) {
+    header('Location: waiting_for_approval.php');
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['selected_plan'])) {
-    $plan = $_POST['selected_plan'];
-    $phone = trim($_POST['payment_phone'] ?? '');
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['selected_plan']) || isset($_POST['plan']))) {
+    $plan = trim($_POST['selected_plan'] ?? $_POST['plan']);
+    $paymentPhone = trim($_POST['payment_phone'] ?? $_POST['phone'] ?? '');
     $costs = [
         'REGULAR' => 20,
         'PREMIUM' => 50,
         'PREMIUM+' => 100
     ];
-    if (empty($phone)) {
-        setFlashMessage('error', 'Please enter a phone number to receive the MPESA payment prompt.');
-    } elseif (isset($costs[$plan])) {
-        $cost = $costs[$plan];
-        $paymentResult = initiateMpesaPayment($phone, $cost, 'Spin Boost ' . $plan . ' plan');
-        if ($paymentResult['success']) {
-            $pdo = getPDO();
-            updateUserPlan($currentUser['id'], $plan);
-            if ($currentUser['referred_by']) {
-                $referrerId = getReferrerId($currentUser['referred_by']);
-                if ($referrerId) {
-                    addReferralReward($referrerId, $plan);
-                }
-            }
-            setFlashMessage('success', $paymentResult['message'] . ' Your plan has been activated and will be confirmed once payment is completed.');
-            header('Location: spin.php');
-            exit;
+
+    if (!isset($costs[$plan]) || empty($paymentPhone)) {
+        setFlashMessage('error', 'Select a plan and enter your phone number.');
+    } elseif ($isPlanChange && $plan === $currentUser['plan']) {
+        setFlashMessage('error', 'You cannot change to the same plan you already have.');
+    } else {
+        createPendingDeposit($currentUser['id'], $costs[$plan], $plan, $paymentPhone);
+        if ($isPlanChange) {
+            setFlashMessage('success', 'Plan change request created! Admin will review and approve your request shortly.');
         } else {
-            setFlashMessage('error', 'MPESA payment prompt could not be sent. Please try again.');
+            setFlashMessage('success', 'Plan request created! Admin will review and approve your request shortly.');
         }
+        header('Location: waiting_for_approval.php');
+        exit;
     }
 }
 
@@ -65,151 +67,60 @@ $flash = getFlashMessage();
             <div class="toast <?php echo $flash['type']; ?>"><?php echo htmlspecialchars($flash['text']); ?></div>
         <?php endif; ?>
 
-        <section class="plans-grid">
-            <div class="plan-card">
-                <h3>Regular</h3>
-                <p class="price">20 KES</p>
-                <ul>
-                    <li>5 spins/day</li>
-                    <li>3 word puzzles/day</li>
-                </ul>
-                <button type="button" class="primary-btn plan-select-btn" data-plan="REGULAR">Select Regular</button>
-            </div>
+        <div class="plan-intro">
+            <p>Choose a plan and enter the phone number you used for mobile money. After clicking "Deposit", send the payment to <strong>0701144109</strong>. Admin will verify and approve your plan.</p>
+        </div>
 
-            <div class="plan-card premium">
-                <h3>Premium</h3>
-                <p class="price">50 KES</p>
-                <ul>
-                    <li>20 spins/day</li>
-                    <li>25 word puzzles/day</li>
-                </ul>
-                <button type="button" class="primary-btn plan-select-btn" data-plan="PREMIUM">Select Premium</button>
+        <form method="post" class="plan-form">
+            <div class="form-group">
+                <label for="payment_phone">Phone Number</label>
+                <input type="tel" id="payment_phone" name="payment_phone" placeholder="07XXXXXXXX" required>
             </div>
+            <input type="hidden" name="selected_plan" id="selected_plan" value="REGULAR">
+            <section class="plans-grid">
+                <div class="plan-card">
+                    <h3>Regular</h3>
+                    <p class="price">20 KES</p>
+                    <ul>
+                        <li>5 spins/day</li>
+                        <li>3 word puzzles/day</li>
+                    </ul>
+                    <button type="button" class="primary-btn plan-select-btn" data-plan="REGULAR">Deposit for Regular</button>
+                </div>
 
-            <div class="plan-card premium-plus">
-                <h3>Premium+</h3>
-                <p class="price">100 KES</p>
-                <ul>
-                    <li>Unlimited spins</li>
-                    <li>Unlimited puzzles</li>
-                </ul>
-                <button type="button" class="primary-btn plan-select-btn" data-plan="PREMIUM+">Select Premium+</button>
-            </div>
-        </section>
+                <div class="plan-card premium">
+                    <h3>Premium</h3>
+                    <p class="price">50 KES</p>
+                    <ul>
+                        <li>20 spins/day</li>
+                        <li>25 word puzzles/day</li>
+                    </ul>
+                    <button type="button" class="primary-btn plan-select-btn" data-plan="PREMIUM">Deposit for Premium</button>
+                </div>
+
+                <div class="plan-card premium-plus">
+                    <h3>Premium+</h3>
+                    <p class="price">100 KES</p>
+                    <ul>
+                        <li>Unlimited spins</li>
+                        <li>Unlimited puzzles</li>
+                    </ul>
+                    <button type="button" class="primary-btn plan-select-btn" data-plan="PREMIUM+">Deposit for Premium+</button>
+                </div>
+            </section>
+        </form>
 
         <footer class="plan-footer">
-            <a href="spin.php" class="secondary-btn">Back to Dashboard</a>
+            <a href="login.php" class="secondary-btn">Back to Login</a>
         </footer>
     </div>
 
-    <div class="modal-overlay" id="planModal">
-        <div class="modal-card">
-            <button class="close-btn" id="closePlanModal">×</button>
-            <div class="modal-content">
-                <h2>Confirm Plan Payment</h2>
-                <p>Enter your phone number to receive the MPESA payment prompt for the selected plan.</p>
-                <form method="post" id="planPaymentForm" class="topup-form">
-                    <input type="hidden" name="selected_plan" id="selectedPlan" value="">
-                    <label for="payment_phone">Phone number</label>
-                    <input type="tel" id="payment_phone" name="payment_phone" placeholder="07XXXXXXXX" required>
-                    <label for="payment_amount">Amount (KES)</label>
-                    <input type="number" id="payment_amount" name="payment_amount" readonly>
-                    <button type="submit" class="primary-btn">Send MPESA Prompt</button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <script src="script.js"></script>
     <script>
-        // Plan payment handler
-        const planButtons = document.querySelectorAll('.plan-select-btn');
-        const planModal = document.getElementById('planModal');
-        const closePlanModal = document.getElementById('closePlanModal');
-        const selectedPlanInput = document.getElementById('selectedPlan');
-        const paymentAmountInput = document.getElementById('payment_amount');
-        const planPaymentForm = document.getElementById('planPaymentForm');
-        const paymentPhoneInput = document.getElementById('payment_phone');
-
-        planButtons.forEach(button => {
+        document.querySelectorAll('.plan-select-btn').forEach(button => {
             button.addEventListener('click', () => {
-                const plan = button.dataset.plan;
-                const costs = { REGULAR: 20, PREMIUM: 50, 'PREMIUM+': 100 };
-                if (!planModal || !selectedPlanInput || !paymentAmountInput) return;
-                selectedPlanInput.value = plan;
-                paymentAmountInput.value = costs[plan] ?? 0;
-                planModal.classList.add('active');
+                document.getElementById('selected_plan').value = button.dataset.plan;
+                document.querySelector('form.plan-form').submit();
             });
-        });
-
-        closePlanModal?.addEventListener('click', () => planModal?.classList.remove('active'));
-
-        // Handle plan payment form submission
-        if (planPaymentForm) {
-            planPaymentForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-
-                const plan = selectedPlanInput.value;
-                const phone = paymentPhoneInput.value.trim();
-                const amount = parseFloat(paymentAmountInput.value);
-
-                // Validate
-                if (!plan || !phone || !amount) {
-                    showToast('Please fill all fields', 'error');
-                    return;
-                }
-
-                if (!/^254[0-9]{9}$/.test(phone)) {
-                    showToast('Invalid phone format. Use 254712345678', 'error');
-                    return;
-                }
-
-                // Show loading state
-                const submitBtn = planPaymentForm.querySelector('button[type="submit"]');
-                const originalText = submitBtn.textContent;
-                submitBtn.disabled = true;
-                submitBtn.textContent = 'Processing...';
-
-                try {
-                    // Call plan payment handler
-                    const response = await fetch('plan_payment_handler.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            plan: plan,
-                            phone: phone,
-                            amount: amount
-                        })
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success && result.stk_push_initiated) {
-                        // Close modal and show success message
-                        planModal.classList.remove('active');
-                        showToast('STK Push initiated! Please check your phone for the MPesa prompt to complete payment.', 'success');
-                        
-                        // Optionally redirect after a delay
-                        setTimeout(() => {
-                            window.location.href = 'spin.php';
-                        }, 3000);
-                    } else {
-                        throw new Error(result.message || 'Failed to initiate payment');
-                    }
-                } catch (error) {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = originalText;
-                    showToast(error.message || 'Payment initiation failed. Please try again.', 'error');
-                    console.error('Plan payment error:', error);
-                }
-            });
-        }
-
-        // Close modal when clicking outside
-        window.addEventListener('click', event => {
-            if (event.target === planModal) planModal.classList.remove('active');
         });
     </script>
 </body>
