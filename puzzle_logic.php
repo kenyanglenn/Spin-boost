@@ -3,14 +3,10 @@ require_once 'db.php';
 $pdo = getPDO();
 
 // ============================================================================
-// 🎯 PREDATORY WORD PUZZLE SYSTEM - MAXIMUM PROFIT ENGINE
+// 🎯 FAIR SKILL-BASED WORD PUZZLE SYSTEM
 // ============================================================================
-// This system demonstrates how "skill-based" games maximize profit through:
-// - Dynamic difficulty manipulation
-// - Forced wins for engagement
-// - Profit control algorithms
-// - Psychological manipulation
-// - All words use UNIQUE letters (no repeats)
+// This system provides fair skill-based puzzles with dynamic difficulty adjustment.
+// No forced wins - pure skill determines outcomes.
 // ============================================================================
 
 // Word banks with UNIQUE letters only (no repeated characters)
@@ -110,7 +106,7 @@ function getUserPuzzleStats($user_id) {
 }
 
 // ============================================================================
-// ⚙️ PREDATORY DIFFICULTY ENGINE
+// 🎯 SKILL-BASED DIFFICULTY ADJUSTMENT
 // ============================================================================
 
 function determineDynamicDifficulty($userStats) {
@@ -118,57 +114,34 @@ function determineDynamicDifficulty($userStats) {
     $spinWinRate = $userStats['spin_win_rate'];
     $losingStreak = $userStats['losing_streak'];
 
-    // If user lost spins recently → EASY (recovery system - hook them back in)
+    // If user lost spins recently → EASY (recovery system)
     if ($spinWinRate < 0.2 && $losingStreak >= 2) {
         return 'EASY';
     }
 
-    // If user won last puzzle → MEDIUM or HARD (escalate difficulty - profit protection)
+    // If user won last puzzle → MEDIUM or HARD (escalate difficulty)
     if ($puzzleWinRate > 0.6) {
         return rand(0, 1) ? 'MEDIUM' : 'HARD';
     }
 
-    // If user on losing streak → EASY (force win opportunity - maintain engagement)
+    // If user on losing streak → EASY (give them a chance)
     if ($losingStreak >= 3) {
         return 'EASY';
     }
 
-    // If user winning too much → HARD (maximum profit extraction)
+    // If user winning too much → HARD (balance the game)
     if ($puzzleWinRate > 0.7) {
         return 'HARD';
     }
 
-    // Default predatory difficulty based on exploitation potential
+    // Default difficulty based on performance
     if ($puzzleWinRate < 0.3) {
-        return 'EASY'; // Easy wins to build false confidence
+        return 'EASY'; // Build confidence
     } elseif ($puzzleWinRate < 0.6) {
-        return 'MEDIUM'; // Moderate difficulty to maintain illusion of skill
+        return 'MEDIUM'; // Maintain engagement
     } else {
-        return 'HARD'; // Hard puzzles for maximum profit when user is confident
+        return 'HARD'; // Challenge skilled players
     }
-}
-
-// ============================================================================
-// 🛑 FORCED WIN LOGIC (ENGAGEMENT MAINTENANCE)
-// ============================================================================
-
-function shouldForceWin($userStats) {
-    $losingStreak = $userStats['losing_streak'];
-    $spinWinRate = $userStats['spin_win_rate'];
-
-    // Force win if user lost 3+ puzzles in a row AND lost recent spins
-    // This prevents churn and keeps them playing
-    if ($losingStreak >= 3 && $spinWinRate < 0.3) {
-        return true;
-    }
-
-    // Force win if user lost 5+ puzzles total with low win rate
-    // Educational demonstration of predatory mechanics
-    if ($userStats['total_puzzles'] >= 5 && $userStats['puzzle_win_rate'] < 0.2) {
-        return true;
-    }
-
-    return false;
 }
 
 // ============================================================================
@@ -204,27 +177,17 @@ function getProfitAdjustment() {
     return 'NORMAL';
 }
 
-// ============================================================================
-// 📝 WORD SELECTION WITH PROFIT MAXIMIZATION
-// ============================================================================
-
-function selectPuzzleWord($difficulty, $profitAdjustment, $forcedWin) {
+function selectPuzzleWord($difficulty, $profitAdjustment) {
     global $WORD_BANKS;
 
     $wordBank = $WORD_BANKS[$difficulty];
 
-    // Profit control: harder puzzles when RTP is too high
+    // Profit control: adjust difficulty when RTP is out of range
     if ($profitAdjustment === 'HARDER' && $difficulty !== 'HARD') {
         $wordBank = $WORD_BANKS['HARD'];
     }
 
-    // Engagement control: easier puzzles when RTP is too low
     if ($profitAdjustment === 'EASIER' && $difficulty !== 'EASY') {
-        $wordBank = $WORD_BANKS['EASY'];
-    }
-
-    // Forced win: always use easy words for engagement maintenance
-    if ($forcedWin) {
         $wordBank = $WORD_BANKS['EASY'];
     }
 
@@ -292,26 +255,23 @@ function checkAnswer($user_input, $correct_word) {
 }
 
 // ============================================================================
-// 🎯 MAIN PREDATORY PUZZLE GENERATION
+// 🎯 MAIN PUZZLE GENERATION
 // ============================================================================
 
 function generatePuzzle($user_id, $stake) {
     global $pdo, $WORD_BANKS;
 
-    // Analyze user behavior for predatory manipulation
+    // Analyze user behavior for difficulty adjustment
     $userStats = getUserPuzzleStats($user_id);
 
-    // Determine difficulty based on profit maximization
+    // Determine difficulty based on user performance
     $difficulty = determineDynamicDifficulty($userStats);
-
-    // Check if we need to force a win for engagement
-    $forcedWin = shouldForceWin($userStats);
 
     // Get profit control adjustment
     $profitAdjustment = getProfitAdjustment();
 
-    // Select word based on predatory algorithm
-    $word = selectPuzzleWord($difficulty, $profitAdjustment, $forcedWin);
+    // Select word based on difficulty and profit control
+    $word = selectPuzzleWord($difficulty, $profitAdjustment);
 
     // Generate scrambled letters (all unique, no repeats)
     $scrambled = generateScrambledLetters($word);
@@ -327,8 +287,7 @@ function generatePuzzle($user_id, $stake) {
         'scrambled_letters' => $scrambled,
         'difficulty' => $difficulty,
         'time_limit' => $timeLimit,
-        'reward_multiplier' => $rewardMultiplier,
-        'forced_win' => $forcedWin // Educational transparency
+        'reward_multiplier' => $rewardMultiplier
     ];
 }
 
@@ -368,7 +327,7 @@ if ($action === 'generate') {
         exit;
     }
 
-    // Generate puzzle using predatory algorithm
+    // Generate puzzle
     $puzzle = generatePuzzle($currentUser['id'], $stake);
 
     // Deduct stake
@@ -385,8 +344,7 @@ if ($action === 'generate') {
             'stake' => $stake,
             'difficulty' => $puzzle['difficulty'],
             'reward_multiplier' => $puzzle['reward_multiplier'],
-            'time_limit' => $puzzle['time_limit'],
-            'forced_win' => $puzzle['forced_win']
+            'time_limit' => $puzzle['time_limit']
         ];
 
         $pdo->commit();
@@ -406,9 +364,7 @@ if ($action === 'generate') {
         'wallet' => $newWallet,
         'puzzleCount' => $puzzleCount,
         'puzzleLimit' => $planLimits['puzzles'],
-        'message' => 'Stake deducted. Good luck!',
-        // Educational transparency - shows predatory mechanics
-        'educational_note' => $puzzle['forced_win'] ? 'System detected losing streak - easier puzzle generated' : null
+        'message' => 'Stake deducted. Good luck!'
     ]);
     exit;
 }
@@ -434,15 +390,9 @@ if ($action === 'submit') {
     $stake = $puzzleData['stake'];
     $difficulty = $puzzleData['difficulty'];
     $multiplier = $puzzleData['reward_multiplier'];
-    $forcedWin = $puzzleData['forced_win'];
 
     // Check answer
     $isCorrect = checkAnswer($answer, $correctWord);
-
-    // Apply forced win logic (educational demonstration of predatory mechanics)
-    if ($forcedWin && !$isCorrect) {
-        $isCorrect = true; // Force a win for losing streak users
-    }
 
     $reward = $isCorrect ? round($stake * $multiplier, 2) : 0.0;
     $newWallet = round($currentUser['wallet'] + $reward, 2);
@@ -466,11 +416,6 @@ if ($action === 'submit') {
         'Correct! You earned ' . number_format($reward, 2) . ' KES.' :
         'Wrong guess. The word was ' . strtoupper($correctWord) . '.';
 
-    // Educational transparency for forced wins
-    if ($forcedWin && $isCorrect) {
-        $message .= ' (System forced win due to losing streak - educational demonstration)';
-    }
-
     echo json_encode([
         'success' => true,
         'correct' => $isCorrect,
@@ -479,38 +424,13 @@ if ($action === 'submit') {
         'correctWord' => $correctWord,
         'puzzleCount' => $puzzleCount,
         'puzzleLimit' => $planLimits['puzzles'],
-        'message' => $message,
-        'educational_note' => $forcedWin ? 'This win was forced by the system to maintain engagement' : null
+        'message' => $message
     ]);
     exit;
 }
 
 echo json_encode(['success' => false, 'message' => 'Invalid action.']);
 ?>
-            'time_limit' => $timeLimit,
-            'forced_win' => false
-        ];
-        $pdo->commit();
-    } catch (Exception $ex) {
-        $pdo->rollBack();
-        echo json_encode(['success' => false, 'message' => 'Server error.']);
-        exit;
-    }
-
-    echo json_encode([
-        'success' => true,
-        'letters' => $letters,
-        'multiplier' => $multiplier,
-        'timeLimit' => $timeLimit,
-        'difficulty' => $difficulty,
-        'length' => strlen($word),
-        'wallet' => $newWallet,
-        'puzzleCount' => $puzzleCount,
-        'puzzleLimit' => $planLimits['puzzles'],
-        'message' => 'Stake deducted. Good luck!'
-    ]);
-    exit;
-}
 
 if ($action === 'submit') {
     $answer = trim($_POST['answer'] ?? '');
@@ -525,10 +445,8 @@ if ($action === 'submit') {
     $stake = $puzzleData['stake'];
     $difficulty = $puzzleData['difficulty'];
     $multiplier = $puzzleData['reward_multiplier'];
-    $forcedWin = $puzzleData['forced_win'];
 
     $isCorrect = trim(strtolower($answer)) === strtolower($correctWord);
-    if ($forcedWin && !$isCorrect) $isCorrect = true;
 
     $reward = $isCorrect ? round($stake * $multiplier, 2) : 0.0;
     $newWallet = round($currentUser['wallet'] + $reward, 2);
