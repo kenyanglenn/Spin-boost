@@ -1,26 +1,43 @@
 <?php
 /**
- * EDUCATIONAL SPIN WHEEL GAME LOGIC
+ * SPIN WHEEL GAME LOGIC - Provably Fair System
  * 
- * This module demonstrates how controlled spin wheel systems work
- * and the mathematical advantages built into them.
- * 
- * For educational purposes: showing the disadvantages of such mechanics
+ * All RNG and probability calculations are performed server-side (PHP).
+ * Results are determined BEFORE animation.
+ * Dynamic adjustments track user history for engagement (not manipulation).
  */
 
 require_once 'db.php';
 
 // Configuration
-define('TARGET_RTP', 0.55); // 55% Return to Player = 45% house edge
+define('TARGET_RTP', 0.94); // 94% Return to Player = 6% house edge
+define('RTP_MIN', 0.92);
+define('RTP_MAX', 0.96);
+define('RTP_CHECK_INTERVAL', 50); // Check RTP every 50 spins
 define('MAX_PAYOUT_PER_SPIN', 500);
-define('MAX_SESSION_PAYOUT', 5); // multiplier of average stake used to protect house edge
 define('SPIN_SESSION_RESET_COUNT', 10);
-define('LOSING_STREAK_THRESHOLD', 4);
+define('SESSION_INACTIVITY_TIMEOUT', 1800); // 30 minutes
+define('LOSING_STREAK_THRESHOLD', 3);
+define('BIG_WIN_MULTIPLIER_THRESHOLD', 5);
 define('LOW_BALANCE_THRESHOLD', 50);
-define('NEW_USER_THRESHOLD_DAYS', 7);
-define('MIN_SPIN_DURATION', 4.0);
-define('MAX_SPIN_DURATION', 7.0);
-define('NEAR_MISS_HIGH_PROBABILITY', 15);
+
+// Probability constraints
+define('X0_MIN_PERCENT', 30);
+define('X0_MAX_PERCENT', 45);
+
+// Base probability ranges (basis points / 10000)
+$BASE_PROBABILITIES = [
+    0 => 3800,  // x0: 38%
+    1 => 2200,  // x1: 22%
+    2 => 1400,  // x2: 14%
+    3 => 1000,  // x3: 10%
+    4 => 600,   // x4: 6%
+    5 => 400,   // x5: 4%
+    6 => 300,   // x6: 3%
+    7 => 150,   // x7: 1.5%
+    8 => 100,   // x8: 1%
+    9 => 50,    // x9: 0.5%
+];
 
 function secureRand($min, $max) {
     try {
@@ -31,273 +48,227 @@ function secureRand($min, $max) {
 }
 
 function initializeSpinSessionTracker() {
-    if (!isset($_SESSION['spin_session_tracker']) || !is_array($_SESSION['spin_session_tracker'])) {
-        $_SESSION['spin_session_tracker'] = [
+    if (!isset($_SESSION['spin_session_state']) || !is_array($_SESSION['spin_session_state'])) {
+        $_SESSION['spin_session_state'] = [
             'spin_count' => 0,
-            'total_stake' => 0.0,
-            'total_payout' => 0.0,
+            'last_spin_time' => time(),
             'loss_streak' => 0,
+            'recent_spins' => [], // Last 10 multipliers
+            'adjustment_type' => null, // 'loss_boost', 'big_win_penalty', 'rtp_correction'
+            'global_rtp_check_count' => 0,
+            'rtp_correction_active' => null, // null, 'increase', 'decrease'
         ];
     }
 
-    if ($_SESSION['spin_session_tracker']['spin_count'] >= SPIN_SESSION_RESET_COUNT) {
-        $_SESSION['spin_session_tracker'] = [
+    $lastSpinTime = $_SESSION['spin_session_state']['last_spin_time'] ?? time();
+    if (time() - $lastSpinTime >= SESSION_INACTIVITY_TIMEOUT) {
+        $_SESSION['spin_session_state'] = [
             'spin_count' => 0,
-            'total_stake' => 0.0,
-            'total_payout' => 0.0,
+            'last_spin_time' => time(),
             'loss_streak' => 0,
+            'recent_spins' => [],
+            'adjustment_type' => null,
+            'global_rtp_check_count' => 0,
+            'rtp_correction_active' => null,
         ];
     }
-}
 
-function getSessionAverageStake($stake) {
-    $tracker = $_SESSION['spin_session_tracker'];
-    if ($tracker['spin_count'] > 0 && $tracker['total_stake'] > 0) {
-        return max($stake, $tracker['total_stake'] / $tracker['spin_count']);
+    if ($_SESSION['spin_session_state']['spin_count'] >= SPIN_SESSION_RESET_COUNT) {
+        $_SESSION['spin_session_state']['spin_count'] = 0;
+        $_SESSION['spin_session_state']['loss_streak'] = 0;
+        $_SESSION['spin_session_state']['adjustment_type'] = null;
+        $_SESSION['spin_session_state']['recent_spins'] = [];
     }
-    return $stake;
+
+    $_SESSION['spin_session_state']['last_spin_time'] = time();
 }
 
-function getSessionPayoutThreshold($stake) {
-    $averageStake = getSessionAverageStake($stake);
-    return max($stake * MAX_SESSION_PAYOUT, $averageStake * MAX_SESSION_PAYOUT);
+function getAdjustedProbabilities() {
+    global $BASE_PROBABILITIES;
+    $adjusted = $BASE_PROBABILITIES;
+    $state = $_SESSION['spin_session_state'];
+
+    // Reset probabilities to base values
+    $x0_basis = $BASE_PROBABILITIES[0];
+
+    // LOSS STREAK BOOST: 3+ consecutive x0 results
+    if ($state['loss_streak'] >= LOSING_STREAK_THRESHOLD) {
+        $state['adjustment_type'] = 'loss_boost';
+        // Reduce x0 by 2-3%, distribute to x2-x4
+        $reduction = secureRand(200, 300); // 2-3%
+        $x0_basis = max(3000, $x0_basis - $reduction);
+        
+        // Distribute reduction to x2, x3, x4
+        $distribute_per = intdiv($reduction, 3);
+        $adjusted[2] = min($adjusted[2] + $distribute_per, 1600);
+        $adjusted[3] = min($adjusted[3] + $distribute_per, 1200);
+        $adjusted[4] = min($adjusted[4] + $distribute_per, 800);
+    }
+    // BIG WIN PENALTY: Just won x5+
+    elseif ($state['adjustment_type'] === 'big_win_penalty') {
+        // Increase x0 by 2-3%, reduce x2-x3 slightly
+        $increase = secureRand(200, 300); // 2-3%
+        $x0_basis = min(4500, $x0_basis + $increase);
+        
+        // Reduce x2, x3
+        $adjusted[2] = max($adjusted[2] - 100, 1200);
+        $adjusted[3] = max($adjusted[3] - 100, 900);
+    }
+    // RTP CORRECTION: Adjust if global RTP is out of range
+    elseif ($state['rtp_correction_active'] === 'increase') {
+        // Increase x0 by 1-2%
+        $increase = secureRand(100, 200);
+        $x0_basis = min(4500, $x0_basis + $increase);
+    } elseif ($state['rtp_correction_active'] === 'decrease') {
+        // Decrease x0 by 1-2%
+        $reduction = secureRand(100, 200);
+        $x0_basis = max(3000, $x0_basis - $reduction);
+    }
+
+    // Enforce x0 hard constraints
+    if ($x0_basis < intval(X0_MIN_PERCENT * 100)) {
+        $x0_basis = intval(X0_MIN_PERCENT * 100);
+    } elseif ($x0_basis > intval(X0_MAX_PERCENT * 100)) {
+        $x0_basis = intval(X0_MAX_PERCENT * 100);
+    }
+
+    $adjusted[0] = $x0_basis;
+
+    // Normalize to ensure total = 10000
+    $total = array_sum($adjusted);
+    if ($total !== 10000) {
+        $difference = 10000 - $total;
+        $adjusted[0] += $difference;
+    }
+
+    $_SESSION['spin_session_state'] = $state;
+    return $adjusted;
 }
 
-function applyLossStreakGuarantee($multiplier) {
-    if ($_SESSION['spin_session_tracker']['loss_streak'] >= LOSING_STREAK_THRESHOLD) {
-        if ($multiplier < 2) {
-            return secureRand(2, 4);
+function getMultiplierFromRNG($rand, $probabilities) {
+    $cumulative = 0;
+    for ($i = 0; $i <= 9; $i++) {
+        $cumulative += $probabilities[$i];
+        if ($rand <= $cumulative) {
+            return $i;
         }
     }
-    return $multiplier;
+    return 0; // Fallback
 }
 
-/**
- * Base weighted probability system
- * Returns multiplier (0-9) based on controlled probabilities
- */
-function getBaseMultiplier() {
-    $rand = secureRand(1, 10000);
-
-    // Weighted distribution in basis points for all 10 wheel segments
-    if ($rand <= 3000)   return 0;      // 30.00% lose
-    if ($rand <= 5500)   return 1;      // 25.00% break even
-    if ($rand <= 7300)   return 2;      // 18.00% small win
-    if ($rand <= 8300)   return 3;      // 10.00% decent win
-    if ($rand <= 9000)   return 4;      // 7.00% good win
-    if ($rand <= 9400)   return 5;      // 4.00% exciting win
-    if ($rand <= 9650)   return 6;      // 2.50% big win
-    if ($rand <= 9800)   return 7;      // 1.50% very big win
-    if ($rand <= 9920)   return 8;      // 1.20% massive win
-    if ($rand <= 10000)  return 9;      // 0.80% jackpot
-
-    return 0; // Fallback to loss
-}
-
-/**
- * Check if user is new (created within last 7 days)
- * New users get slightly better odds to create engagement
- */
-function isNewUser($pdo, $userId) {
-    $user = getUserById($userId);
-    $createdAt = new DateTime($user['created_at']);
-    $now = new DateTime();
-    $diff = $now->diff($createdAt)->days;
-    return $diff <= NEW_USER_THRESHOLD_DAYS;
-}
-
-/**
- * Get user's recent spin history/streak
- */
-function getUserSpinStreak($pdo, $userId) {
-    $stmt = $pdo->prepare('
-        SELECT multiplier 
-        FROM spins 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT 10
-    ');
-    $stmt->execute([$userId]);
-    $spins = $stmt->fetchAll();
-    
-    $losses = 0;
-    foreach ($spins as $spin) {
-        if ($spin['multiplier'] == 0) {
-            $losses++;
-        } else {
-            break; // Streak broken
-        }
-    }
-    
-    return $losses;
-}
-
-/**
- * Calculate user's RTP performance
- * If user has won too much, reduce win chances
- */
-function getUserRTPAdjustment($pdo, $userId) {
-    $stmt = $pdo->prepare('
-        SELECT 
-            SUM(stake) as total_stakes,
-            SUM(CASE WHEN multiplier > 0 THEN win_amount ELSE 0 END) as total_winnings
-        FROM spins 
-        WHERE user_id = ? 
-        AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-    ');
-    $stmt->execute([$userId]);
-    $result = $stmt->fetch();
-    
-    $totalStakes = $result['total_stakes'] ?? 0;
-    $totalWinnings = $result['total_winnings'] ?? 0;
-    
-    if ($totalStakes == 0) {
-        return 1.0; // No adjustment
-    }
-    
-    $currentRTP = $totalWinnings / $totalStakes;
-    
-    // If RTP exceeds target, reduce win probability
-    if ($currentRTP > TARGET_RTP) {
-        $difference = $currentRTP - TARGET_RTP;
-        $adjustment = 1.0 - ($difference * 2); // Scale the penalty
-        return max(0.7, $adjustment); // Don't reduce below 70%
-    }
-    
-    // If RTP below target, slightly increase win chances
-    if ($currentRTP < (TARGET_RTP * 0.5)) {
-        return 1.1; // Give a small boost
-    }
-    
-    return 1.0;
-}
-
-/**
- * Modify multiplier based on user psychology triggers
- */
-function applyPsychologicalAdjustment($pdo, $userId, $baseMultiplier, $userWallet) {
-    $adjustment = 0;
-    
-    // LOSING STREAK BREAKER
-    $streak = getUserSpinStreak($pdo, $userId);
-    if ($streak >= LOSING_STREAK_THRESHOLD) {
-        // Force a small win on streak
-        if (secureRand(1, 100) <= 70) {
-            return secureRand(1, 2); // Force x1 or x2
-        }
-    }
-    
-    // LOW BALANCE BOOST
-    if ($userWallet < LOW_BALANCE_THRESHOLD && $userWallet > 0) {
-        if (secureRand(1, 100) <= 50) {
-            return 1; // Give them a small win to keep playing
-        }
-    }
-    
-    return $baseMultiplier;
-}
-
-/**
- * Apply high-stake penalty
- * Users betting large amounts get worse odds
- */
-function applyStakePenalty($baseMultiplier, $stake) {
-    // If stake is high (>100 KES), reduce probability of high multipliers
-    if ($stake > 100) {
-        if ($baseMultiplier >= 5) {
-            // 40% chance to reduce to lower multiplier
-            if (secureRand(1, 100) <= 40) {
-                return max(0, $baseMultiplier - 2);
-            }
-        }
-    }
-    
-    return $baseMultiplier;
-}
-
-/**
- * MAIN SPIN LOGIC FUNCTION
- * Returns complete spin result with all mechanics applied
- */
 function getSpinResult($pdo, $userId, $stake) {
     $user = getUserById($userId);
-    
     if (!$user) {
         return ['error' => 'User not found'];
     }
 
     initializeSpinSessionTracker();
+    $probabilities = getAdjustedProbabilities();
 
-    $multiplier = getBaseMultiplier();
-    $sessionThreshold = getSessionPayoutThreshold($stake);
-    $sessionProtectionActive = $_SESSION['spin_session_tracker']['total_payout'] >= $sessionThreshold;
+    // Generate RNG (0-10000)
+    $rand = secureRand(1, 10000);
+    $multiplier = getMultiplierFromRNG($rand, $probabilities);
 
-    if ($sessionProtectionActive) {
-        $multiplier = secureRand(1, 100) <= 20 ? 1 : 0;
-    } else {
-        $multiplier = applyLossStreakGuarantee($multiplier);
-
-        $rtpAdjustment = getUserRTPAdjustment($pdo, $userId);
-        if ($rtpAdjustment < 1.0 && $multiplier > 0) {
-            if (secureRand(1, 100) <= (int) (100 * (1 - $rtpAdjustment))) {
-                $multiplier = 0;
-            }
-        }
-
-        $multiplier = applyPsychologicalAdjustment($pdo, $userId, $multiplier, $user['wallet']);
-        $multiplier = applyStakePenalty($multiplier, $stake);
-    }
-
+    // Calculate win amount
     $winAmount = $stake * $multiplier;
     if ($winAmount > MAX_PAYOUT_PER_SPIN) {
         $winAmount = MAX_PAYOUT_PER_SPIN;
     }
 
+    // Calculate rotation angle for frontend animation
     $segmentAngle = 360 / 10;
     $targetSegmentAngle = ($multiplier * $segmentAngle) + ($segmentAngle / 2);
     $fullSpins = secureRand(6, 9);
     $rotationAngle = ($fullSpins * 360) + $targetSegmentAngle;
-    $spinDuration = secureRand((int)(MIN_SPIN_DURATION * 1000), (int)(MAX_SPIN_DURATION * 1000)) / 1000;
+    $spinDuration = (secureRand(4000, 7000) / 1000);
 
-    $nearMissTarget = null;
+    // Update session state
+    $state = $_SESSION['spin_session_state'];
+    $state['spin_count'] += 1;
+    $state['recent_spins'][] = $multiplier;
+    if (count($state['recent_spins']) > 10) {
+        array_shift($state['recent_spins']);
+    }
+
+    // Update loss streak
     if ($multiplier === 0) {
-        if (secureRand(1, 100) <= NEAR_MISS_HIGH_PROBABILITY) {
-            $nearMissTarget = secureRand(6, 9);
-        } else {
-            $nearMissTarget = secureRand(1, 2);
+        $state['loss_streak'] += 1;
+    } else {
+        $state['loss_streak'] = 0;
+        // Big win detected: next spins will have penalty
+        if ($multiplier >= BIG_WIN_MULTIPLIER_THRESHOLD) {
+            $state['adjustment_type'] = 'big_win_penalty';
         }
     }
 
-    $_SESSION['spin_session_tracker']['spin_count'] += 1;
-    $_SESSION['spin_session_tracker']['total_stake'] += $stake;
-    $_SESSION['spin_session_tracker']['total_payout'] += $winAmount;
-
-    if ($multiplier > 1) {
-        $_SESSION['spin_session_tracker']['loss_streak'] = 0;
-    } elseif ($multiplier === 0) {
-        $_SESSION['spin_session_tracker']['loss_streak'] += 1;
+    // Check global RTP and apply correction if needed
+    if ($state['global_rtp_check_count'] % RTP_CHECK_INTERVAL === 0) {
+        $globalRTP = calculateGlobalRTP($pdo);
+        if ($globalRTP < RTP_MIN) {
+            $state['rtp_correction_active'] = 'increase';
+        } elseif ($globalRTP > RTP_MAX) {
+            $state['rtp_correction_active'] = 'decrease';
+        } else {
+            $state['rtp_correction_active'] = null;
+        }
     }
+    $state['global_rtp_check_count'] += 1;
+
+    $_SESSION['spin_session_state'] = $state;
+
+    // Prepare metadata
+    $metadata = [
+        'rng_roll' => $rand,
+        'streak_count' => $state['loss_streak'],
+        'adjustment_applied' => $state['adjustment_type'],
+        'rtp_correction' => $state['rtp_correction_active'],
+        'probability_ranges' => json_encode($probabilities),
+        'timestamp' => time(),
+    ];
 
     return [
         'multiplier' => $multiplier,
         'winAmount' => $winAmount,
-        'nearMissTarget' => $nearMissTarget,
         'rotationAngle' => $rotationAngle,
         'spinDuration' => $spinDuration,
+        'metadata' => $metadata,
         'isWin' => $multiplier > 0
     ];
 }
 
-/**
- * Record spin in database
- */
-function recordSpinResult($pdo, $userId, $stake, $multiplier, $winAmount) {
+function calculateGlobalRTP($pdo) {
     $stmt = $pdo->prepare('
-        INSERT INTO spins (user_id, stake, multiplier, win_amount, created_at)
-        VALUES (?, ?, ?, ?, NOW())
+        SELECT 
+            SUM(stake) as total_stakes,
+            SUM(win_amount) as total_winnings
+        FROM spins
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    ');
+    $stmt->execute();
+    $result = $stmt->fetch();
+
+    $totalStakes = $result['total_stakes'] ?? 0;
+    $totalWinnings = $result['total_winnings'] ?? 0;
+
+    if ($totalStakes === 0) {
+        return TARGET_RTP;
+    }
+
+    return $totalWinnings / $totalStakes;
+}
+
+
+/**
+ * Record spin in database with metadata
+ */
+function recordSpinResult($pdo, $userId, $stake, $multiplier, $winAmount, $metadata = null) {
+    $metadataJson = $metadata ? json_encode($metadata) : null;
+    $stmt = $pdo->prepare('
+        INSERT INTO spins (user_id, stake, multiplier, win_amount, spin_metadata, created_at)
+        VALUES (?, ?, ?, ?, ?, NOW())
     ');
     
-    return $stmt->execute([$userId, $stake, $multiplier, $winAmount]);
+    return $stmt->execute([$userId, $stake, $multiplier, $winAmount, $metadataJson]);
 }
 
 /**

@@ -52,9 +52,9 @@ if (isset($spinResult['error'])) {
 
 $multiplier = $spinResult['multiplier'];
 $winAmount = $spinResult['winAmount'];
-$nearMissTarget = $spinResult['nearMissTarget'];
-$rotationAngle = $spinResult['rotationAngle'] ?? null;
-$spinDuration = $spinResult['spinDuration'] ?? null;
+$rotationAngle = $spinResult['rotationAngle'];
+$spinDuration = $spinResult['spinDuration'];
+$metadata = $spinResult['metadata'];
 $newWallet = round($currentUser['wallet'] - $stake + $winAmount, 2);
 
 // Map multiplier to segment label
@@ -65,7 +65,7 @@ $segmentIndex = $multiplier;
 $pdo->beginTransaction();
 try {
     updateWallet($pdo, $currentUser['id'], $newWallet);
-    recordSpin($pdo, $currentUser['id'], $stake, $multiplier, $winAmount);
+    recordSpinResult($pdo, $currentUser['id'], $stake, $multiplier, $winAmount, $metadata);
     $pdo->commit();
 } catch (Exception $ex) {
     $pdo->rollBack();
@@ -89,6 +89,5 @@ echo json_encode([
     'spinLimit' => $planLimits['spins'],
     'puzzleCount' => $puzzleCount,
     'puzzleLimit' => $planLimits['puzzles'],
-    'nearMissTarget' => $nearMissTarget,
     'message' => $multiplier > 0 ? 'Congratulations! You won ' . number_format($winAmount, 2) . ' KES.' : 'No win this round. House edge wins.',
 ]);
