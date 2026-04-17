@@ -1,4 +1,11 @@
 <?php
+session_start();
+
+if (!isset($_SESSION['is_admin']) || $_SESSION['is_admin'] != 1) {
+    http_response_code(403);
+    exit("403 - Access Denied");
+}
+<?php
 require_once 'db.php';
 require_once 'spin_game_logic.php';
 
