@@ -78,19 +78,15 @@ function secureRandom() {
     return Math.random();
 }
 
-function rotateWheelToSegment(index, onComplete) {
-    const segmentAngle = 360 / 10;
-    const extraSpins = 6 + Math.floor(secureRandom() * 6);
-    const target = 360 * extraSpins + (index * segmentAngle) + segmentAngle / 2;
-    const duration = 2.8 + secureRandom() * 0.8;
+function rotateWheelToSegment(targetAngle, duration, onComplete) {
     const easing = `cubic-bezier(${0.18 + secureRandom() * 0.1}, ${0.8 + secureRandom() * 0.08}, ${0.25 + secureRandom() * 0.08}, 1)`;
 
     spinWheel.style.transition = `transform ${duration.toFixed(2)}s ${easing}`;
-    spinWheel.style.transform = `rotate(-${target}deg)`;
+    spinWheel.style.transform = `rotate(-${targetAngle}deg)`;
 
     const handleTransitionEnd = () => {
         spinWheel.style.transition = 'none';
-        const normalized = target % 360;
+        const normalized = targetAngle % 360;
         spinWheel.style.transform = `rotate(-${normalized}deg)`;
         if (typeof onComplete === 'function') {
             onComplete();
@@ -98,6 +94,23 @@ function rotateWheelToSegment(index, onComplete) {
     };
 
     spinWheel.addEventListener('transitionend', handleTransitionEnd, { once: true });
+}
+
+function animateSpin(data, onComplete) {
+    if (data.multiplier === 0 && data.nearMissTarget !== null && data.rotationAngle !== undefined) {
+        const segmentAngle = 360 / 10;
+        const rotations = Math.floor(data.rotationAngle / 360);
+        const intermediate = Math.max(0, ((rotations - 1) * 360) + (data.nearMissTarget * segmentAngle) + segmentAngle / 2);
+        const firstDuration = Math.max(1.2, data.spinDuration * 0.55);
+        const secondDuration = Math.max(0.8, data.spinDuration - firstDuration);
+
+        rotateWheelToSegment(intermediate, firstDuration, () => {
+            rotateWheelToSegment(data.rotationAngle, secondDuration, onComplete);
+        });
+        return;
+    }
+
+    rotateWheelToSegment(data.rotationAngle, data.spinDuration, onComplete);
 }
 
 function fetchSpin() {
@@ -120,7 +133,7 @@ function fetchSpin() {
             spinNowBtn.disabled = false;
             return;
         }
-        rotateWheelToSegment(data.segmentIndex, () => {
+        animateSpin(data, () => {
             const newWallet = parseFloat(data.wallet).toFixed(2);
             updateWalletDisplay(newWallet);
             spinResultText.textContent = `Result: ${data.segmentLabel} — multiplier ×${data.multiplier}. Wallet: ${newWallet} KES.`;

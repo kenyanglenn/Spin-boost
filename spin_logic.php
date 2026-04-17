@@ -53,6 +53,8 @@ if (isset($spinResult['error'])) {
 $multiplier = $spinResult['multiplier'];
 $winAmount = $spinResult['winAmount'];
 $nearMissTarget = $spinResult['nearMissTarget'];
+$rotationAngle = $spinResult['rotationAngle'] ?? null;
+$spinDuration = $spinResult['spinDuration'] ?? null;
 $newWallet = round($currentUser['wallet'] - $stake + $winAmount, 2);
 
 // Map multiplier to segment label
@@ -81,6 +83,8 @@ echo json_encode([
     'multiplier' => $multiplier,
     'winAmount' => $winAmount,
     'wallet' => $newWallet,
+    'spinDuration' => $spinDuration,
+    'rotationAngle' => $rotationAngle,
     'spinCount' => $spinCount + 1,
     'spinLimit' => $planLimits['spins'],
     'puzzleCount' => $puzzleCount,

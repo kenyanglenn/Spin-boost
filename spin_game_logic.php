@@ -13,10 +13,14 @@ require_once 'db.php';
 // Configuration
 define('TARGET_RTP', 0.55); // 55% Return to Player = 45% house edge
 define('MAX_PAYOUT_PER_SPIN', 500);
-define('MAX_SESSION_PAYOUT', 1000); // Cap total session winnings to protect house edge
-define('LOSING_STREAK_THRESHOLD', 3);
+define('MAX_SESSION_PAYOUT', 5); // multiplier of average stake used to protect house edge
+define('SPIN_SESSION_RESET_COUNT', 10);
+define('LOSING_STREAK_THRESHOLD', 4);
 define('LOW_BALANCE_THRESHOLD', 50);
 define('NEW_USER_THRESHOLD_DAYS', 7);
+define('MIN_SPIN_DURATION', 4.0);
+define('MAX_SPIN_DURATION', 7.0);
+define('NEAR_MISS_HIGH_PROBABILITY', 15);
 
 function secureRand($min, $max) {
     try {
@@ -24,6 +28,48 @@ function secureRand($min, $max) {
     } catch (Exception $e) {
         return mt_rand($min, $max);
     }
+}
+
+function initializeSpinSessionTracker() {
+    if (!isset($_SESSION['spin_session_tracker']) || !is_array($_SESSION['spin_session_tracker'])) {
+        $_SESSION['spin_session_tracker'] = [
+            'spin_count' => 0,
+            'total_stake' => 0.0,
+            'total_payout' => 0.0,
+            'loss_streak' => 0,
+        ];
+    }
+
+    if ($_SESSION['spin_session_tracker']['spin_count'] >= SPIN_SESSION_RESET_COUNT) {
+        $_SESSION['spin_session_tracker'] = [
+            'spin_count' => 0,
+            'total_stake' => 0.0,
+            'total_payout' => 0.0,
+            'loss_streak' => 0,
+        ];
+    }
+}
+
+function getSessionAverageStake($stake) {
+    $tracker = $_SESSION['spin_session_tracker'];
+    if ($tracker['spin_count'] > 0 && $tracker['total_stake'] > 0) {
+        return max($stake, $tracker['total_stake'] / $tracker['spin_count']);
+    }
+    return $stake;
+}
+
+function getSessionPayoutThreshold($stake) {
+    $averageStake = getSessionAverageStake($stake);
+    return max($stake * MAX_SESSION_PAYOUT, $averageStake * MAX_SESSION_PAYOUT);
+}
+
+function applyLossStreakGuarantee($multiplier) {
+    if ($_SESSION['spin_session_tracker']['loss_streak'] >= LOSING_STREAK_THRESHOLD) {
+        if ($multiplier < 2) {
+            return secureRand(2, 4);
+        }
+    }
+    return $multiplier;
 }
 
 /**
@@ -34,16 +80,16 @@ function getBaseMultiplier() {
     $rand = secureRand(1, 10000);
 
     // Weighted distribution in basis points for all 10 wheel segments
-    if ($rand <= 6000)   return 0;      // 60.00% consolation / loss
-    if ($rand <= 8000)   return 1;      // 20.00% low win
-    if ($rand <= 9000)   return 2;      // 10.00% low-mid win
-    if ($rand <= 9400)   return 3;      // 4.00% mid win
-    if ($rand <= 9650)   return 4;      // 2.50% mid-high win
-    if ($rand <= 9800)   return 5;      // 1.50% high win
-    if ($rand <= 9880)   return 6;      // 0.80% bigger win
-    if ($rand <= 9925)   return 7;      // 0.45% premium win
-    if ($rand <= 9955)   return 8;      // 0.30% jackpot-level win
-    if ($rand <= 10000)  return 9;      // 0.45% top jackpot
+    if ($rand <= 3000)   return 0;      // 30.00% lose
+    if ($rand <= 5500)   return 1;      // 25.00% break even
+    if ($rand <= 7300)   return 2;      // 18.00% small win
+    if ($rand <= 8300)   return 3;      // 10.00% decent win
+    if ($rand <= 9000)   return 4;      // 7.00% good win
+    if ($rand <= 9400)   return 5;      // 4.00% exciting win
+    if ($rand <= 9650)   return 6;      // 2.50% big win
+    if ($rand <= 9800)   return 7;      // 1.50% very big win
+    if ($rand <= 9920)   return 8;      // 1.20% massive win
+    if ($rand <= 10000)  return 9;      // 0.80% jackpot
 
     return 0; // Fallback to loss
 }
@@ -179,54 +225,65 @@ function getSpinResult($pdo, $userId, $stake) {
     if (!$user) {
         return ['error' => 'User not found'];
     }
-    
-    // Initialize session payout tracking if needed
-    if (!isset($_SESSION['spin_session_payout'])) {
-        $_SESSION['spin_session_payout'] = 0;
-    }
 
-    // Step 1: Base probability
+    initializeSpinSessionTracker();
+
     $multiplier = getBaseMultiplier();
+    $sessionThreshold = getSessionPayoutThreshold($stake);
+    $sessionProtectionActive = $_SESSION['spin_session_tracker']['total_payout'] >= $sessionThreshold;
 
-    // Step 1a: Enforce session payout cap if threshold exceeded
-    if ($_SESSION['spin_session_payout'] >= MAX_SESSION_PAYOUT) {
+    if ($sessionProtectionActive) {
         $multiplier = secureRand(1, 100) <= 20 ? 1 : 0;
-    }
-    
-    // Step 2: Apply RTP adjustment
-    $rtpAdjustment = getUserRTPAdjustment($pdo, $userId);
-    if ($rtpAdjustment < 1.0 && $multiplier > 0) {
-        // Reduce win probability if user has won too much
-        if (secureRand(1, 100) <= (int) (100 * (1 - $rtpAdjustment))) {
-            $multiplier = 0;
+    } else {
+        $multiplier = applyLossStreakGuarantee($multiplier);
+
+        $rtpAdjustment = getUserRTPAdjustment($pdo, $userId);
+        if ($rtpAdjustment < 1.0 && $multiplier > 0) {
+            if (secureRand(1, 100) <= (int) (100 * (1 - $rtpAdjustment))) {
+                $multiplier = 0;
+            }
         }
+
+        $multiplier = applyPsychologicalAdjustment($pdo, $userId, $multiplier, $user['wallet']);
+        $multiplier = applyStakePenalty($multiplier, $stake);
     }
-    
-    // Step 3: Apply psychological adjustments
-    $multiplier = applyPsychologicalAdjustment($pdo, $userId, $multiplier, $user['wallet']);
-    
-    // Step 4: Apply stake penalty
-    $multiplier = applyStakePenalty($multiplier, $stake);
-    
-    // Step 5: Calculate win amount
+
     $winAmount = $stake * $multiplier;
-    
-    // Step 6: Apply payout cap
     if ($winAmount > MAX_PAYOUT_PER_SPIN) {
         $winAmount = MAX_PAYOUT_PER_SPIN;
     }
-    
-    // Step 7: Determine near-miss target (for visual effect)
+
+    $segmentAngle = 360 / 10;
+    $targetSegmentAngle = ($multiplier * $segmentAngle) + ($segmentAngle / 2);
+    $fullSpins = secureRand(6, 9);
+    $rotationAngle = ($fullSpins * 360) + $targetSegmentAngle;
+    $spinDuration = secureRand((int)(MIN_SPIN_DURATION * 1000), (int)(MAX_SPIN_DURATION * 1000)) / 1000;
+
     $nearMissTarget = null;
-    if ($multiplier == 0 && secureRand(1, 100) <= 40) {
-        // Create illusion of near-miss
-        $nearMissTarget = secureRand(7, 9);
+    if ($multiplier === 0) {
+        if (secureRand(1, 100) <= NEAR_MISS_HIGH_PROBABILITY) {
+            $nearMissTarget = secureRand(6, 9);
+        } else {
+            $nearMissTarget = secureRand(1, 2);
+        }
     }
-    
+
+    $_SESSION['spin_session_tracker']['spin_count'] += 1;
+    $_SESSION['spin_session_tracker']['total_stake'] += $stake;
+    $_SESSION['spin_session_tracker']['total_payout'] += $winAmount;
+
+    if ($multiplier > 1) {
+        $_SESSION['spin_session_tracker']['loss_streak'] = 0;
+    } elseif ($multiplier === 0) {
+        $_SESSION['spin_session_tracker']['loss_streak'] += 1;
+    }
+
     return [
         'multiplier' => $multiplier,
         'winAmount' => $winAmount,
         'nearMissTarget' => $nearMissTarget,
+        'rotationAngle' => $rotationAngle,
+        'spinDuration' => $spinDuration,
         'isWin' => $multiplier > 0
     ];
 }
