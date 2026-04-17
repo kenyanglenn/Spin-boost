@@ -1,11 +1,10 @@
 <?php
-session_start();
+// BLOCK ACCESS FIRST
+http_response_code(403);
+echo "<h2>403 - Access Denied</h2>";
+exit();
 
-if (!isset($_SESSION['is_admin']) || $_SESSION['is_admin'] != 1) {
-    http_response_code(403);
-    exit("403 - Access Denied");
-}
-<?php
+// analytics logic here...
 require_once 'db.php';
 require_once 'spin_game_logic.php';
 
